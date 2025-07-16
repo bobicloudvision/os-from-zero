@@ -49,8 +49,8 @@ mouse_state_t* mouse_get_state(void);
 void mouse_set_bounds(int max_x, int max_y);
 
 // Internal functions
-void mouse_send_command(uint8_t cmd);
-uint8_t mouse_read_data(void);
+bool mouse_send_command(uint8_t cmd);
+bool mouse_read_data(uint8_t *data);
 void mouse_process_packet(mouse_packet_t* packet);
 
 #endif // MOUSE_H 

@@ -28,47 +28,64 @@ static uint8_t packet_buffer[3];
 static int packet_byte = 0;
 static bool packet_ready = false;
 
-// Wait for PS/2 controller to be ready for input
-static void wait_for_input(void) {
-    while (inb(PS2_STATUS_PORT) & PS2_STATUS_INPUT_FULL) {
-        // Wait until input buffer is empty
+// Wait for PS/2 controller to be ready for input (with timeout)
+static bool wait_for_input(void) {
+    volatile uint32_t timeout = 100000; // Timeout counter
+    while ((inb(PS2_STATUS_PORT) & PS2_STATUS_INPUT_FULL) && timeout > 0) {
+        timeout--;
+        __asm__ volatile ("nop");
     }
+    return timeout > 0; // Return true if succeeded, false if timed out
 }
 
-// Wait for PS/2 controller to have output ready
-static void wait_for_output(void) {
-    while (!(inb(PS2_STATUS_PORT) & PS2_STATUS_OUTPUT_FULL)) {
-        // Wait until output buffer is full
+// Wait for PS/2 controller to have output ready (with timeout)
+static bool wait_for_output(void) {
+    volatile uint32_t timeout = 100000; // Timeout counter
+    while (!(inb(PS2_STATUS_PORT) & PS2_STATUS_OUTPUT_FULL) && timeout > 0) {
+        timeout--;
+        __asm__ volatile ("nop");
     }
+    return timeout > 0; // Return true if succeeded, false if timed out
 }
 
 // Send command to PS/2 controller
-static void ps2_send_command(uint8_t cmd) {
-    wait_for_input();
+static bool ps2_send_command(uint8_t cmd) {
+    if (!wait_for_input()) {
+        return false; // Timeout
+    }
     outb(PS2_COMMAND_PORT, cmd);
+    return true;
 }
 
 // Send data to PS/2 controller
-static void ps2_send_data(uint8_t data) {
-    wait_for_input();
+static bool ps2_send_data(uint8_t data) {
+    if (!wait_for_input()) {
+        return false; // Timeout
+    }
     outb(PS2_DATA_PORT, data);
+    return true;
 }
 
 // Read data from PS/2 controller
-static uint8_t ps2_read_data(void) {
-    wait_for_output();
-    return inb(PS2_DATA_PORT);
+static bool ps2_read_data(uint8_t *data) {
+    if (!wait_for_output()) {
+        return false; // Timeout
+    }
+    *data = inb(PS2_DATA_PORT);
+    return true;
 }
 
 // Send command to mouse
-void mouse_send_command(uint8_t cmd) {
-    ps2_send_command(PS2_CMD_MOUSE_WRITE);
-    ps2_send_data(cmd);
+bool mouse_send_command(uint8_t cmd) {
+    if (!ps2_send_command(PS2_CMD_MOUSE_WRITE)) {
+        return false;
+    }
+    return ps2_send_data(cmd);
 }
 
 // Read data from mouse
-uint8_t mouse_read_data(void) {
-    return ps2_read_data();
+bool mouse_read_data(uint8_t *data) {
+    return ps2_read_data(data);
 }
 
 // Initialize PS/2 mouse
@@ -87,36 +104,60 @@ void mouse_init(void) {
     packet_byte = 0;
     packet_ready = false;
     
-    // Enable auxiliary device (mouse)
-    ps2_send_command(PS2_CMD_ENABLE_MOUSE);
+    // Try to enable auxiliary device (mouse)
+    if (!ps2_send_command(PS2_CMD_ENABLE_MOUSE)) {
+        // PS2 controller not available, mouse will not work
+        return;
+    }
     
-    // Reset mouse
-    mouse_send_command(MOUSE_CMD_RESET);
+    // Try to reset mouse
+    if (!mouse_send_command(MOUSE_CMD_RESET)) {
+        // Mouse reset failed, mouse will not work
+        return;
+    }
     
     // Wait for acknowledgment
-    uint8_t response = mouse_read_data();
-    if (response != MOUSE_ACK) {
-        // Reset failed, try to continue anyway
+    uint8_t response;
+    if (!mouse_read_data(&response) || response != MOUSE_ACK) {
+        // Reset failed, mouse will not work
+        return;
     }
     
     // Wait for self-test completion (0xAA)
-    response = mouse_read_data();
-    if (response != 0xAA) {
-        // Self-test failed, try to continue anyway
+    if (!mouse_read_data(&response) || response != 0xAA) {
+        // Self-test failed, mouse will not work
+        return;
     }
     
     // Wait for device ID (0x00 for standard mouse)
-    response = mouse_read_data();
+    if (!mouse_read_data(&response)) {
+        // Failed to get device ID, mouse will not work
+        return;
+    }
     
     // Set mouse defaults
-    mouse_send_command(MOUSE_CMD_SET_DEFAULTS);
-    response = mouse_read_data();
+    if (!mouse_send_command(MOUSE_CMD_SET_DEFAULTS)) {
+        // Failed to set defaults, mouse will not work
+        return;
+    }
+    
+    if (!mouse_read_data(&response)) {
+        // Failed to get response, mouse will not work
+        return;
+    }
     
     // Enable data reporting
-    mouse_send_command(MOUSE_CMD_ENABLE_DATA_REPORTING);
-    response = mouse_read_data();
+    if (!mouse_send_command(MOUSE_CMD_ENABLE_DATA_REPORTING)) {
+        // Failed to enable data reporting, mouse will not work
+        return;
+    }
     
-    (void)response; // Suppress unused variable warning
+    if (!mouse_read_data(&response)) {
+        // Failed to get response, mouse will not work
+        return;
+    }
+    
+    // Mouse initialization successful
 }
 
 // Check if mouse has data available
@@ -171,7 +212,10 @@ void mouse_handle_interrupt(void) {
         return;
     }
     
-    uint8_t data = mouse_read_data();
+    uint8_t data;
+    if (!mouse_read_data(&data)) {
+        return; // Failed to read data
+    }
     
     // PS/2 mouse sends 3-byte packets
     if (packet_byte == 0) {
