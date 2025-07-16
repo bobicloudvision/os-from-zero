@@ -7,6 +7,7 @@
 #include "mouse.h"
 #include "shell.h"
 #include "fs/filesystem.h"
+#include "audio.h"
 
 // Set the base revision to 3, this is recommended as this is the latest
 // base revision described by the Limine boot protocol specification.
@@ -124,6 +125,9 @@ void kmain(void) {
     // Initialize mouse and set screen bounds
     mouse_init();
     mouse_set_bounds(framebuffer->width, framebuffer->height);
+    
+    // Initialize audio system
+    audio_init();
     
     shell_init();
     

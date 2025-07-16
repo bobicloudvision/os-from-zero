@@ -1,10 +1,12 @@
 #include "shell.h"
 #include "commands/system.h"
 #include "commands/filesystem.h"
+#include "commands/audio.h"
 #include "terminal.h"
 #include "keyboard.h"
 #include "mouse.h"
 #include "string.h"
+#include "audio.h"
 #include <stddef.h>
 #include <stdbool.h>
 
@@ -105,6 +107,9 @@ void shell_init(void) {
     
     // Register filesystem commands
     register_filesystem_commands();
+    
+    // Register audio commands
+    register_audio_commands();
 }
 
 // Shell main loop
@@ -113,7 +118,11 @@ void shell_loop(void) {
     terminal_print("Type 'help' for available commands.\n");
     terminal_print("Try 'ls' to see some sample files!\n");
     terminal_print("Move your mouse to see the cursor!\n");
-    terminal_print("Try the 'mouse' command to check position!\n\n");
+    terminal_print("Try the 'mouse' command to check position!\n");
+    terminal_print("Try 'beep', 'play', or 'audiotest' for audio!\n\n");
+    
+    // Play startup sound
+    audio_startup_sound();
     
     // Draw initial mouse cursor
     update_mouse_cursor();

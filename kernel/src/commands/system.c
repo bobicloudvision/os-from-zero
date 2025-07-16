@@ -1,6 +1,7 @@
 #include "system.h"
 #include "../terminal.h"
 #include "../string.h"
+#include "../audio.h"
 #include <stddef.h>
 
 // External command registry (defined in shell.c)
@@ -95,6 +96,10 @@ void cmd_version(const char *args) {
 void cmd_exit(const char *args) {
     (void)args; // Unused parameter
     terminal_print("Shutting down DEA OS...\n");
+    
+    // Play shutdown sound
+    audio_shutdown_sound();
+    
     terminal_print("Thank you for using DEA OS!\n");
     terminal_print("System halted. You can now power off safely.\n");
     

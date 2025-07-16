@@ -42,4 +42,40 @@ char *strcat(char *dest, const char *src) {
     while (*ptr) ptr++;  // Find end of dest
     while ((*ptr++ = *src++));  // Copy src to end of dest
     return dest;
-} 
+}
+
+// Convert integer to string
+void int_to_string(int value, char *buffer) {
+    if (value == 0) {
+        buffer[0] = '0';
+        buffer[1] = '\0';
+        return;
+    }
+    
+    char temp[12];  // Enough for 32-bit int
+    int i = 0;
+    int is_negative = 0;
+    
+    if (value < 0) {
+        is_negative = 1;
+        value = -value;
+    }
+    
+    // Convert digits in reverse order
+    while (value > 0) {
+        temp[i++] = '0' + (value % 10);
+        value /= 10;
+    }
+    
+    // Add negative sign if needed
+    if (is_negative) {
+        temp[i++] = '-';
+    }
+    
+    // Reverse the string
+    int j = 0;
+    while (i > 0) {
+        buffer[j++] = temp[--i];
+    }
+    buffer[j] = '\0';
+}
