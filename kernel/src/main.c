@@ -2,6 +2,9 @@
 #include <stddef.h>
 #include <stdbool.h>
 #include <limine.h>
+#include "terminal.h"
+#include "keyboard.h"
+#include "shell.h"
 
 // Set the base revision to 3, this is recommended as this is the latest
 // base revision described by the Limine boot protocol specification.
@@ -87,51 +90,6 @@ int memcmp(const void *s1, const void *s2, size_t n) {
     return 0;
 }
 
-// Simple 8x8 bitmap font for basic characters
-static const uint8_t font_8x8[][8] = {
-    [' '] = {0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00},
-    ['H'] = {0x66, 0x66, 0x66, 0x7E, 0x66, 0x66, 0x66, 0x00},
-    ['e'] = {0x00, 0x00, 0x3C, 0x06, 0x3E, 0x66, 0x3E, 0x00},
-    ['l'] = {0x18, 0x18, 0x18, 0x18, 0x18, 0x18, 0x0F, 0x00},
-    ['o'] = {0x00, 0x00, 0x3C, 0x66, 0x66, 0x66, 0x3C, 0x00},
-    ['W'] = {0x63, 0x63, 0x63, 0x6B, 0x7F, 0x77, 0x63, 0x00},
-    ['r'] = {0x00, 0x00, 0x3E, 0x66, 0x60, 0x60, 0x60, 0x00},
-    ['d'] = {0x06, 0x06, 0x06, 0x3E, 0x66, 0x66, 0x3E, 0x00},
-    ['!'] = {0x18, 0x18, 0x18, 0x18, 0x00, 0x18, 0x18, 0x00},
-};
-
-// Function to draw a character at a specific position
-static void draw_char(struct limine_framebuffer *framebuffer, char c, int x, int y, uint32_t color) {
-    if (c < 32 || c > 126) return; // Only printable ASCII
-    
-    const uint8_t *glyph = font_8x8[c];
-    volatile uint32_t *fb_ptr = framebuffer->address;
-    
-    for (int row = 0; row < 8; row++) {
-        for (int col = 0; col < 8; col++) {
-            if (glyph[row] & (1 << (7 - col))) {
-                int pixel_x = x + col;
-                int pixel_y = y + row;
-                
-                if (pixel_x < framebuffer->width && pixel_y < framebuffer->height) {
-                    fb_ptr[pixel_y * (framebuffer->pitch / 4) + pixel_x] = color;
-                }
-            }
-        }
-    }
-}
-
-// Function to draw a string
-static void draw_string(struct limine_framebuffer *framebuffer, const char *str, int x, int y, uint32_t color) {
-    int current_x = x;
-    
-    while (*str) {
-        draw_char(framebuffer, *str, current_x, y, color);
-        current_x += 8; // Move to next character position
-        str++;
-    }
-}
-
 // Halt and catch fire function.
 static void hcf(void) {
     for (;;) {
@@ -157,15 +115,14 @@ void kmain(void) {
     // Fetch the first framebuffer.
     struct limine_framebuffer *framebuffer = framebuffer_request.response->framebuffers[0];
 
-    // Clear the screen with black background
-    volatile uint32_t *fb_ptr = framebuffer->address;
-    for (size_t i = 0; i < framebuffer->width * framebuffer->height; i++) {
-        fb_ptr[i] = 0x000000; // Black background
-    }
+    // Initialize subsystems
+    terminal_init(framebuffer);
+    keyboard_init();
+    shell_init();
 
-    // Draw "Hello World!" in white text
-    draw_string(framebuffer, "Hello World!", 100, 100, 0xFFFFFF);
+    // Clear the screen
+    clear_screen();
 
-    // We're done, just hang...
-    hcf();
+    // Start the shell
+    shell_loop();
 }
