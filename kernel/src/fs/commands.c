@@ -2,6 +2,7 @@
 #include "filesystem.h"
 #include "../terminal.h"
 #include "../string.h"
+#include "../shell.h"
 
 // Helper function to print file size
 void print_file_size(size_t size) {
@@ -246,4 +247,14 @@ void cmd_write(const char *args) {
         terminal_print(filename);
         terminal_print("'.\n");
     }
+}
+
+// Register all filesystem commands
+void register_fs_commands(void) {
+    register_command("ls", cmd_ls, "List files and directories", "ls");
+    register_command("cat", cmd_cat, "Display file contents", "cat <filename>");
+    register_command("rm", cmd_rm, "Remove a file", "rm <filename>");
+    register_command("touch", cmd_touch, "Create an empty file", "touch <filename>");
+    register_command("write", cmd_write, "Write text to a file", "write <filename> <text>");
+    register_command("df", cmd_df, "Show disk usage statistics", "df");
 } 

@@ -15,4 +15,7 @@ void cmd_write(const char *args);
 void print_file_size(size_t size);
 void print_file_type(int type);
 
+// Registration function
+void register_fs_commands(void);
+
 #endif 
