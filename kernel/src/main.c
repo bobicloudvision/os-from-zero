@@ -8,6 +8,10 @@
 #include "shell.h"
 // #include "fs/filesystem.h"
 #include "audio.h"
+#include "fpu_simple.h"
+
+// Global framebuffer pointer for graphics3d system
+struct limine_framebuffer *g_framebuffer = NULL;
 
 // Set the base revision to 3, this is recommended as this is the latest
 // base revision described by the Limine boot protocol specification.
@@ -171,6 +175,12 @@ void kmain(void) {
         hcf();
     }
 
+    // Initialize FPU early in boot process
+    if (!fpu_init()) {
+        vga_write_string("DEA OS - Boot Error: Failed to initialize FPU\n");
+        hcf();
+    }
+
     // Ensure we got a framebuffer.
     if (framebuffer_request.response == NULL
      || framebuffer_request.response->framebuffer_count < 1) {
@@ -181,6 +191,9 @@ void kmain(void) {
 
     // Fetch the first framebuffer.
     struct limine_framebuffer *framebuffer = framebuffer_request.response->framebuffers[0];
+    
+    // Make framebuffer globally accessible for graphics3d commands
+    g_framebuffer = framebuffer;
 
     // Initialize subsystems in order
     terminal_init(framebuffer);
@@ -247,6 +260,13 @@ void kmain(void) {
     terminal_print(height_str);
     terminal_print("\n");
     terminal_print("PS2 Controller: Initialized successfully\n");
+    terminal_print("FPU: Enabled (");
+    if (sse_is_supported()) {
+        terminal_print("SSE supported");
+    } else {
+        terminal_print("x87 only");
+    }
+    terminal_print(")\n");
     terminal_print("============================\n\n");
     
     // Initialize filesystem after other subsystems are ready

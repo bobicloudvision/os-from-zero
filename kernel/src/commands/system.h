@@ -34,5 +34,6 @@ void cmd_version(const char *args);
 void cmd_font(const char *args);
 void cmd_fontinfo(const char *args);
 void cmd_exit(const char *args);
+void command_fpu_test(const char *args);
 
 #endif // COMMANDS_SYSTEM_H 

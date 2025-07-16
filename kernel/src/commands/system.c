@@ -2,6 +2,7 @@
 #include "../terminal.h"
 #include "../string.h"
 #include "../audio.h"
+#include "math.h"
 #include <stddef.h>
 
 // External command registry (defined in shell.c)
@@ -115,6 +116,8 @@ void cmd_exit(const char *args) {
     );
 }
 
+
+
 // Register all system commands
 void register_system_commands(void) {
     register_command("help", cmd_help, "Show available commands", "help [command]", "System");
@@ -124,4 +127,7 @@ void register_system_commands(void) {
     register_command("uptime", cmd_uptime, "Show system uptime", "uptime", "System");
     register_command("exit", cmd_exit, "Exit and halt the system", "exit", "System");
     register_command("version", cmd_version, "Show detailed version info", "version", "Info");
+    
+    // Register math commands
+    register_math_commands();
 } 
