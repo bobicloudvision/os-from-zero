@@ -6,7 +6,7 @@
 #include "keyboard.h"
 #include "mouse.h"
 #include "shell.h"
-#include "fs/filesystem.h"
+// #include "fs/filesystem.h"
 #include "audio.h"
 
 // Set the base revision to 3, this is recommended as this is the latest
@@ -250,7 +250,7 @@ void kmain(void) {
     terminal_print("============================\n\n");
     
     // Initialize filesystem after other subsystems are ready
-    fs_init();
+    // fs_init(); // Commented out to avoid boot issues
 
     // Start the shell
     shell_loop();

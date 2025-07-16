@@ -2,6 +2,7 @@
 #include "commands/system.h"
 #include "commands/filesystem.h"
 #include "commands/audio.h"
+#include "commands/game.h"
 #include "terminal.h"
 #include "keyboard.h"
 #include "mouse.h"
@@ -110,6 +111,9 @@ void shell_init(void) {
     
     // Register audio commands
     register_audio_commands();
+    
+    // Register game commands
+    init_game_commands();
 }
 
 // Shell main loop
@@ -119,7 +123,8 @@ void shell_loop(void) {
     terminal_print("Try 'ls' to see some sample files!\n");
     terminal_print("Move your mouse to see the cursor!\n");
     terminal_print("Try the 'mouse' command to check position!\n");
-    terminal_print("Try 'beep', 'play', or 'audiotest' for audio!\n\n");
+    terminal_print("Try 'beep', 'play', or 'audiotest' for audio!\n");
+    terminal_print("🎮 NEW: Play games with 'guess', 'tictactoe', or 'rps'!\n\n");
     
     // Play startup sound
     audio_play_event(AUDIO_STARTUP_SOUND);
