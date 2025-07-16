@@ -51,7 +51,7 @@ static void parse_two_ints(const char *args, int *first, int *second) {
 void cmd_beep(const char *args) {
     if (!args || *args == '\0') {
         // Default system beep
-        audio_system_beep();
+        audio_play_event(AUDIO_SYSTEM_BEEP);
         return;
     }
     
@@ -129,10 +129,10 @@ void cmd_play(const char *args) {
     
     if (strcmp(args, "startup") == 0) {
         terminal_print("Playing startup melody...\n");
-        audio_startup_sound();
+        audio_play_event(AUDIO_STARTUP_SOUND);
     } else if (strcmp(args, "shutdown") == 0) {
         terminal_print("Playing shutdown melody...\n");
-        audio_shutdown_sound();
+        audio_play_event(AUDIO_SHUTDOWN_SOUND);
     } else if (strcmp(args, "scale") == 0) {
         terminal_print("Playing C major scale...\n");
         audio_note_t scale[] = {
@@ -189,11 +189,11 @@ void cmd_audio_test(const char *args) {
     terminal_print("Testing audio system...\n");
     
     terminal_print("1. System beep... ");
-    audio_system_beep();
+    audio_play_event(AUDIO_SYSTEM_BEEP);
     terminal_print("Done!\n");
     
     terminal_print("2. Error beep... ");
-    audio_error_beep();
+    audio_play_event(AUDIO_ERROR_BEEP);
     terminal_print("Done!\n");
     
     terminal_print("3. Frequency sweep (200Hz to 2000Hz)...\n");

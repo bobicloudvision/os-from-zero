@@ -122,7 +122,7 @@ void shell_loop(void) {
     terminal_print("Try 'beep', 'play', or 'audiotest' for audio!\n\n");
     
     // Play startup sound
-    audio_startup_sound();
+    audio_play_event(AUDIO_STARTUP_SOUND);
     
     // Draw initial mouse cursor
     update_mouse_cursor();

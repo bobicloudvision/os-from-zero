@@ -5,7 +5,7 @@ MAKEFLAGS += -rR
 # Default user QEMU flags. These are appended to the QEMU command calls.
 # PC Speaker support for audio feedback
 # Alternative audio backends: -audiodev alsa,id=audio0 (Linux) or -audiodev coreaudio,id=audio0 (macOS)
-QEMUFLAGS := -m 2G -audiodev pa,id=audio0 -machine pcspk-audiodev=audio0
+QEMUFLAGS := -m 2G -audiodev coreaudio,id=audio0 -machine pcspk-audiodev=audio0
 
 override IMAGE_NAME := DEA
 

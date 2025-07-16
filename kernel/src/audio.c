@@ -123,14 +123,6 @@ void audio_play_melody(const audio_note_t *notes, size_t count) {
     }
 }
 
-// Audio event types
-typedef enum {
-    AUDIO_SYSTEM_BEEP,
-    AUDIO_ERROR_BEEP,
-    AUDIO_STARTUP_SOUND,
-    AUDIO_SHUTDOWN_SOUND
-} audio_event_type_t;
-
 void audio_play_event(audio_event_type_t event_type) {
     switch (event_type) {
         case AUDIO_SYSTEM_BEEP:

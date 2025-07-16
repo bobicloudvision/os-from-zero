@@ -98,7 +98,7 @@ void cmd_exit(const char *args) {
     terminal_print("Shutting down DEA OS...\n");
     
     // Play shutdown sound
-    audio_shutdown_sound();
+    audio_play_event(AUDIO_SHUTDOWN_SOUND);
     
     terminal_print("Thank you for using DEA OS!\n");
     terminal_print("System halted. You can now power off safely.\n");
