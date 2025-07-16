@@ -2,9 +2,7 @@
 #define FS_COMMANDS_H
 
 #include <stdbool.h>
-
-// Command registry function
-bool register_command(const char *name, void (*func)(const char *args), const char *description, const char *usage, const char *category);
+#include "../system_commands.h"
 
 // Function to register all filesystem commands
 void register_fs_commands(void);
