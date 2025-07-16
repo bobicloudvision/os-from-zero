@@ -1,31 +1,73 @@
-# Makefile for os-from-zero (64-bit, two-stage bootloader)
+# Makefile for our OS
 
-BOOT64 = bootloader/boot64.asm
-BOOT64BIN = bootloader/boot64.bin
-LOADER64 = bootloader/loader64.asm
-LOADER64BIN = bootloader/loader64.bin
-KERNEL64_SRC = kernel/kernel64.c
-KERNEL64_BIN = kernel/kernel64.bin
-KERNEL64_LD = kernel/linker64.ld
-OS_IMAGE64 = os-image64.bin
+# Set the compiler and flags
+CC = x86_64-elf-gcc
+AS = nasm
+LD = x86_64-elf-ld
+CFLAGS = -Wall -Wextra -std=c11 -ffreestanding -O2 -g -no-pie
+ASFLAGS = -f elf64
+LDFLAGS = -T src/linker.ld -nostdlib -melf_x86_64
 
-all: $(BOOT64BIN) $(LOADER64BIN) $(KERNEL64_BIN) $(OS_IMAGE64)
+# Set the directories
+SRC_DIR = src
+BUILD_DIR = build
+DIST_DIR = dist
 
-$(BOOT64BIN): $(BOOT64)
-	nasm -f bin $(BOOT64) -o $(BOOT64BIN)
+# Set the files
+KERNEL_C = $(SRC_DIR)/kernel.c
+BOOT_ASM = $(SRC_DIR)/boot.asm
+KERNEL_OBJ = $(BUILD_DIR)/kernel.o
+BOOT_OBJ = $(BUILD_DIR)/boot.o
+KERNEL_BIN = $(BUILD_DIR)/kernel.bin
 
-$(LOADER64BIN): $(LOADER64)
-	nasm -f bin $(LOADER64) -o $(LOADER64BIN)
+# Set the Limine files
+LIMINE_DIR = limine
+LIMINE_CFG = src/limine.cfg
+LIMINE_BOOT = $(LIMINE_DIR)/limine-bios.sys
+LIMINE_UEFI_CD = $(LIMINE_DIR)/limine-uefi-cd.bin
+LIMINE_BIOS_CD = $(LIMINE_DIR)/limine-bios-cd.bin
+LIMINE_EFI = $(LIMINE_DIR)/BOOTX64.EFI
+LIMINE_IMG = $(DIST_DIR)/myos.iso
 
-$(KERNEL64_BIN): $(KERNEL64_SRC) $(KERNEL64_LD)
-	x86_64-elf-gcc -ffreestanding -m64 -c $(KERNEL64_SRC) -o kernel/kernel64.o
-	x86_64-elf-ld -T $(KERNEL64_LD) kernel/kernel64.o -o $(KERNEL64_BIN)
+# Default target
+all: $(LIMINE_IMG)
 
-$(OS_IMAGE64): $(BOOT64BIN) $(LOADER64BIN) $(KERNEL64_BIN)
-	cat $(BOOT64BIN) $(LOADER64BIN) $(KERNEL64_BIN) > $(OS_IMAGE64)
+# Compile the kernel
+$(KERNEL_OBJ): $(KERNEL_C)
+	@mkdir -p $(@D)
+	$(CC) $(CFLAGS) -c $< -o $@
 
-run-os-image64: $(OS_IMAGE64)
-	qemu-system-x86_64 -drive format=raw,file=$(OS_IMAGE64)
+# Assemble the boot file
+$(BOOT_OBJ): $(BOOT_ASM)
+	@mkdir -p $(@D)
+	$(AS) $(ASFLAGS) $< -o $@
 
+# Link the kernel
+$(KERNEL_BIN): $(KERNEL_OBJ) $(BOOT_OBJ)
+	@mkdir -p $(@D)
+	$(LD) $(LDFLAGS) -o $@ $(BOOT_OBJ) $(KERNEL_OBJ)
+
+# Create the ISO image
+$(LIMINE_IMG): $(KERNEL_BIN) $(LIMINE_CFG)
+	make -C $(LIMINE_DIR)
+	@mkdir -p $(DIST_DIR)/iso_root/EFI/BOOT
+	cp $(KERNEL_BIN) $(DIST_DIR)/iso_root/kernel.bin
+	cp $(LIMINE_CFG) $(DIST_DIR)/iso_root/limine.cfg
+	cp $(LIMINE_BOOT) $(DIST_DIR)/iso_root/
+	cp $(LIMINE_UEFI_CD) $(DIST_DIR)/iso_root/
+	cp $(LIMINE_BIOS_CD) $(DIST_DIR)/iso_root/
+	cp $(LIMINE_EFI) $(DIST_DIR)/iso_root/EFI/BOOT/
+	xorriso -as mkisofs -b limine-bios-cd.bin \
+		-no-emul-boot -boot-load-size 4 -boot-info-table \
+		--no-emul-boot -eltorito-alt-boot \
+		-e limine-uefi-cd.bin -no-emul-boot \
+		-o $(LIMINE_IMG) $(DIST_DIR)/iso_root
+	$(LIMINE_DIR)/limine bios-install $(LIMINE_IMG)
+
+# Run the OS in QEMU
+run: $(LIMINE_IMG)
+	qemu-system-x86_64 -cdrom $(LIMINE_IMG)
+
+# Clean the build files
 clean:
-	rm -f $(BOOT64BIN) $(LOADER64BIN) $(KERNEL64_BIN) $(OS_IMAGE64) kernel/kernel64.o 
+	rm -rf $(BUILD_DIR) $(DIST_DIR) 
