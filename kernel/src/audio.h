@@ -46,11 +46,16 @@ void audio_play_tone(uint16_t frequency);
 // Play a melody from an array of notes
 void audio_play_melody(const audio_note_t *notes, size_t count);
 
-// Predefined sounds
-void audio_system_beep(void);    // Standard system beep
-void audio_error_beep(void);     // Error notification beep
-void audio_startup_sound(void);  // Boot/startup melody
-void audio_shutdown_sound(void); // Shutdown melody
+// Audio event types
+typedef enum {
+    AUDIO_SYSTEM_BEEP,
+    AUDIO_ERROR_BEEP,
+    AUDIO_STARTUP_SOUND,
+    AUDIO_SHUTDOWN_SOUND
+} audio_event_type_t;
+
+// Play predefined audio events
+void audio_play_event(audio_event_type_t event_type);
 
 // Debug function
 void audio_debug_test(void);     // Direct hardware test

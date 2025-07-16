@@ -123,36 +123,50 @@ void audio_play_melody(const audio_note_t *notes, size_t count) {
     }
 }
 
-void audio_system_beep(void) {
-    // Standard system beep: 1000 Hz for 200ms
-    audio_beep(1000, 200);
-}
+// Audio event types
+typedef enum {
+    AUDIO_SYSTEM_BEEP,
+    AUDIO_ERROR_BEEP,
+    AUDIO_STARTUP_SOUND,
+    AUDIO_SHUTDOWN_SOUND
+} audio_event_type_t;
 
-void audio_error_beep(void) {
-    // Error beep: 500 Hz for 500ms
-    audio_beep(500, 500);
-}
-
-void audio_startup_sound(void) {
-    // Simple startup melody
-    audio_note_t startup[] = {
-        {523, 200},  // C5
-        {659, 200},  // E5
-        {784, 200},  // G5
-        {1047, 400}  // C6
-    };
-    audio_play_melody(startup, sizeof(startup) / sizeof(startup[0]));
-}
-
-void audio_shutdown_sound(void) {
-    // Simple shutdown melody
-    audio_note_t shutdown[] = {
-        {1047, 200}, // C6
-        {784, 200},  // G5
-        {659, 200},  // E5
-        {523, 400}   // C5
-    };
-    audio_play_melody(shutdown, sizeof(shutdown) / sizeof(shutdown[0]));
+void audio_play_event(audio_event_type_t event_type) {
+    switch (event_type) {
+        case AUDIO_SYSTEM_BEEP:
+            // Standard system beep: 1000 Hz for 200ms
+            audio_beep(1000, 200);
+            break;
+            
+        case AUDIO_ERROR_BEEP:
+            // Error beep: 500 Hz for 500ms
+            audio_beep(500, 500);
+            break;
+            
+        case AUDIO_STARTUP_SOUND: {
+            // Simple startup melody
+            audio_note_t startup[] = {
+                {523, 200},  // C5
+                {659, 200},  // E5
+                {784, 200},  // G5
+                {1047, 400}  // C6
+            };
+            audio_play_melody(startup, sizeof(startup) / sizeof(startup[0]));
+            break;
+        }
+        
+        case AUDIO_SHUTDOWN_SOUND: {
+            // Simple shutdown melody
+            audio_note_t shutdown[] = {
+                {1047, 200}, // C6
+                {784, 200},  // G5
+                {659, 200},  // E5
+                {523, 400}   // C5
+            };
+            audio_play_melody(shutdown, sizeof(shutdown) / sizeof(shutdown[0]));
+            break;
+        }
+    }
 }
 
 // Debug function to test hardware directly
