@@ -92,42 +92,6 @@ void cmd_version(const char *args) {
     terminal_print("Architecture: x86_64\n");
 }
 
-void cmd_font(const char *args) {
-    if (!args || strlen(args) == 0) {
-        terminal_print("Usage: font <font_name> | font list\n");
-        terminal_print("Available commands:\n");
-        terminal_print("  font list      - List available fonts\n");
-        terminal_print("  font <name>    - Switch to font\n");
-        terminal_print("  font default   - Use default font\n");
-        terminal_print("  font bold      - Use bold font\n");
-        return;
-    }
-    
-    if (strcmp(args, "list") == 0) {
-        list_available_fonts();
-    } else {
-        if (set_current_font(args)) {
-            terminal_print("Font changed to: ");
-            terminal_print(args);
-            terminal_print("\n");
-        } else {
-            terminal_print("Font '");
-            terminal_print(args);
-            terminal_print("' not found.\n");
-        }
-    }
-}
-
-void cmd_fontinfo(const char *args) {
-    (void)args; // Unused parameter
-    terminal_print("Font System Information:\n");
-    terminal_print("- Font files are stored in the filesystem\n");
-    terminal_print("- Font format: name(32) + width(1) + height(1) + char_data(128*8)\n");
-    terminal_print("- Currently supports 8x8 bitmap fonts\n");
-    terminal_print("- Default fonts: default, bold\n");
-    terminal_print("- Use 'font list' to see loaded fonts\n");
-}
-
 void cmd_exit(const char *args) {
     (void)args; // Unused parameter
     terminal_print("Shutting down DEA OS...\n");
@@ -155,6 +119,4 @@ void register_system_commands(void) {
     register_command("uptime", cmd_uptime, "Show system uptime", "uptime", "System");
     register_command("exit", cmd_exit, "Exit and halt the system", "exit", "System");
     register_command("version", cmd_version, "Show detailed version info", "version", "Info");
-    register_command("font", cmd_font, "Manage fonts", "font <name> | font list", "Display");
-    register_command("fontinfo", cmd_fontinfo, "Show font system information", "fontinfo", "Display");
 } 
