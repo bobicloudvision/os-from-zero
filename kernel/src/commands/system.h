@@ -31,5 +31,7 @@ void cmd_about(const char *args);
 void cmd_echo(const char *args);
 void cmd_uptime(const char *args);
 void cmd_version(const char *args);
+void cmd_font(const char *args);
+void cmd_fontinfo(const char *args);
 
 #endif // COMMANDS_SYSTEM_H 
