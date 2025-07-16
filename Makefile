@@ -50,17 +50,18 @@ $(KERNEL_BIN): $(KERNEL_OBJ) $(BOOT_OBJ)
 # Create the ISO image
 $(LIMINE_IMG): $(KERNEL_BIN) $(LIMINE_CFG)
 	make -C $(LIMINE_DIR)
+	@mkdir -p $(DIST_DIR)/iso_root/boot
 	@mkdir -p $(DIST_DIR)/iso_root/EFI/BOOT
-	cp $(KERNEL_BIN) $(DIST_DIR)/iso_root/kernel.bin
+	cp $(KERNEL_BIN) $(DIST_DIR)/iso_root/boot/kernel.bin
 	cp $(LIMINE_CFG) $(DIST_DIR)/iso_root/limine.cfg
-	cp $(LIMINE_BOOT) $(DIST_DIR)/iso_root/
-	cp $(LIMINE_UEFI_CD) $(DIST_DIR)/iso_root/
-	cp $(LIMINE_BIOS_CD) $(DIST_DIR)/iso_root/
+	cp $(LIMINE_BOOT) $(DIST_DIR)/iso_root/boot/
+	cp $(LIMINE_UEFI_CD) $(DIST_DIR)/iso_root/boot/
+	cp $(LIMINE_BIOS_CD) $(DIST_DIR)/iso_root/boot/
 	cp $(LIMINE_EFI) $(DIST_DIR)/iso_root/EFI/BOOT/
-	xorriso -as mkisofs -b limine-bios-cd.bin \
+	xorriso -as mkisofs -b boot/limine-bios-cd.bin \
 		-no-emul-boot -boot-load-size 4 -boot-info-table \
 		--no-emul-boot -eltorito-alt-boot \
-		-e limine-uefi-cd.bin -no-emul-boot \
+		-e boot/limine-uefi-cd.bin -no-emul-boot \
 		-o $(LIMINE_IMG) $(DIST_DIR)/iso_root
 	$(LIMINE_DIR)/limine bios-install $(LIMINE_IMG)
 
