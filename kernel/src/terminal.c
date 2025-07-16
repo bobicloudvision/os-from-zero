@@ -22,14 +22,25 @@ void draw_char(struct limine_framebuffer *framebuffer, char c, int x, int y, uin
     const uint8_t *glyph = font_8x8[(unsigned char)c];
     volatile uint32_t *fb_ptr = framebuffer->address;
     
+    // Scale from 8x8 to 14x14
     for (int row = 0; row < 8; row++) {
         for (int col = 0; col < 8; col++) {
             if (glyph[row] & (1 << (7 - col))) {
-                int pixel_x = x + col;
-                int pixel_y = y + row;
+                // Scale each pixel to approximately 1.75x1.75 pixels
+                int scale_start_x = (col * 14) / 8;
+                int scale_end_x = ((col + 1) * 14) / 8;
+                int scale_start_y = (row * 14) / 8;
+                int scale_end_y = ((row + 1) * 14) / 8;
                 
-                if (pixel_x < (int)framebuffer->width && pixel_y < (int)framebuffer->height) {
-                    fb_ptr[pixel_y * (framebuffer->pitch / 4) + pixel_x] = color;
+                for (int scaled_y = scale_start_y; scaled_y < scale_end_y; scaled_y++) {
+                    for (int scaled_x = scale_start_x; scaled_x < scale_end_x; scaled_x++) {
+                        int pixel_x = x + scaled_x;
+                        int pixel_y = y + scaled_y;
+                        
+                        if (pixel_x < (int)framebuffer->width && pixel_y < (int)framebuffer->height) {
+                            fb_ptr[pixel_y * (framebuffer->pitch / 4) + pixel_x] = color;
+                        }
+                    }
                 }
             }
         }
@@ -42,7 +53,7 @@ void draw_string(struct limine_framebuffer *framebuffer, const char *str, int x,
     
     while (*str) {
         draw_char(framebuffer, *str, current_x, y, color);
-        current_x += 8; // Move to next character position (8 pixels wide)
+        current_x += CHAR_WIDTH; // Move to next character position (14 pixels wide)
         str++;
     }
 }

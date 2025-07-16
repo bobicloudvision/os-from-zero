@@ -7,10 +7,10 @@
 #include <limine.h>
 
 // Display constants
-#define CHAR_WIDTH 8
-#define CHAR_HEIGHT 8
-#define TEXT_COLOR 0x00FFFFFF
-#define BG_COLOR 0x00000000
+#define CHAR_WIDTH 14
+#define CHAR_HEIGHT 14
+#define TEXT_COLOR 0x003fb950
+#define BG_COLOR 0x0d1117
 
 // Font structure for loaded fonts
 typedef struct {
