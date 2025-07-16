@@ -149,10 +149,41 @@ void cmd_play(const char *args) {
     } else if (strcmp(args, "twinkle") == 0) {
         terminal_print("Playing Twinkle Twinkle Little Star...\n");
         audio_note_t twinkle[] = {
-            {NOTE_C4, 400}, {NOTE_C4, 400}, {NOTE_G4, 400}, {NOTE_G4, 400},
-            {NOTE_A4, 400}, {NOTE_A4, 400}, {NOTE_G4, 800},
-            {NOTE_F4, 400}, {NOTE_F4, 400}, {NOTE_E4, 400}, {NOTE_E4, 400},
-            {NOTE_D4, 400}, {NOTE_D4, 400}, {NOTE_C4, 800}
+            // "Twinkle twinkle little star"
+            {NOTE_C4, 500}, {NOTE_REST, 100}, {NOTE_C4, 500}, {NOTE_REST, 100},
+            {NOTE_G4, 500}, {NOTE_REST, 100}, {NOTE_G4, 500}, {NOTE_REST, 100},
+            {NOTE_A4, 500}, {NOTE_REST, 100}, {NOTE_A4, 500}, {NOTE_REST, 100},
+            {NOTE_G4, 1000}, {NOTE_REST, 300},
+            
+            // "How I wonder what you are"
+            {NOTE_F4, 500}, {NOTE_REST, 100}, {NOTE_F4, 500}, {NOTE_REST, 100},
+            {NOTE_E4, 500}, {NOTE_REST, 100}, {NOTE_E4, 500}, {NOTE_REST, 100},
+            {NOTE_D4, 500}, {NOTE_REST, 100}, {NOTE_D4, 500}, {NOTE_REST, 100},
+            {NOTE_C4, 1000}, {NOTE_REST, 400},
+            
+            // "Up above the world so high"
+            {NOTE_G4, 500}, {NOTE_REST, 100}, {NOTE_G4, 500}, {NOTE_REST, 100},
+            {NOTE_F4, 500}, {NOTE_REST, 100}, {NOTE_F4, 500}, {NOTE_REST, 100},
+            {NOTE_E4, 500}, {NOTE_REST, 100}, {NOTE_E4, 500}, {NOTE_REST, 100},
+            {NOTE_D4, 1000}, {NOTE_REST, 300},
+            
+            // "Like a diamond in the sky"
+            {NOTE_G4, 500}, {NOTE_REST, 100}, {NOTE_G4, 500}, {NOTE_REST, 100},
+            {NOTE_F4, 500}, {NOTE_REST, 100}, {NOTE_F4, 500}, {NOTE_REST, 100},
+            {NOTE_E4, 500}, {NOTE_REST, 100}, {NOTE_E4, 500}, {NOTE_REST, 100},
+            {NOTE_D4, 1000}, {NOTE_REST, 400},
+            
+            // "Twinkle twinkle little star"
+            {NOTE_C4, 500}, {NOTE_REST, 100}, {NOTE_C4, 500}, {NOTE_REST, 100},
+            {NOTE_G4, 500}, {NOTE_REST, 100}, {NOTE_G4, 500}, {NOTE_REST, 100},
+            {NOTE_A4, 500}, {NOTE_REST, 100}, {NOTE_A4, 500}, {NOTE_REST, 100},
+            {NOTE_G4, 1000}, {NOTE_REST, 300},
+            
+            // "How I wonder what you are"
+            {NOTE_F4, 500}, {NOTE_REST, 100}, {NOTE_F4, 500}, {NOTE_REST, 100},
+            {NOTE_E4, 500}, {NOTE_REST, 100}, {NOTE_E4, 500}, {NOTE_REST, 100},
+            {NOTE_D4, 500}, {NOTE_REST, 100}, {NOTE_D4, 500}, {NOTE_REST, 100},
+            {NOTE_C4, 1200}
         };
         audio_play_melody(twinkle, sizeof(twinkle) / sizeof(twinkle[0]));
     } else {
