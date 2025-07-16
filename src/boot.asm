@@ -2,7 +2,7 @@ bits 64
 global start
 extern kmain
 
-section .text
+section .boot
 start:
     call kmain
     hlt 
