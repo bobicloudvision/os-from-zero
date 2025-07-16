@@ -5,6 +5,7 @@
 #include "terminal.h"
 #include "keyboard.h"
 #include "shell.h"
+#include "fs/filesystem.h"
 
 // Set the base revision to 3, this is recommended as this is the latest
 // base revision described by the Limine boot protocol specification.
@@ -115,13 +116,16 @@ void kmain(void) {
     // Fetch the first framebuffer.
     struct limine_framebuffer *framebuffer = framebuffer_request.response->framebuffers[0];
 
-    // Initialize subsystems
+    // Initialize subsystems in order
     terminal_init(framebuffer);
     keyboard_init();
     shell_init();
-
+    
     // Clear the screen
     clear_screen();
+    
+    // Initialize filesystem after other subsystems are ready
+    fs_init();
 
     // Start the shell
     shell_loop();
