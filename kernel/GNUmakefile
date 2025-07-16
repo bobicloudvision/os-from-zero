@@ -18,6 +18,13 @@ ifneq ($(TOOLCHAIN),)
     endif
 endif
 
+# Automatically detect macOS and set cross-compilation toolchain
+ifeq ($(TOOLCHAIN_PREFIX),)
+    ifeq ($(shell uname -s),Darwin)
+        TOOLCHAIN_PREFIX := x86_64-elf-
+    endif
+endif
+
 # User controllable C compiler command.
 ifneq ($(TOOLCHAIN_PREFIX),)
     CC := $(TOOLCHAIN_PREFIX)gcc
