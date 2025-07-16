@@ -128,6 +128,24 @@ void cmd_fontinfo(const char *args) {
     terminal_print("- Use 'font list' to see loaded fonts\n");
 }
 
+void cmd_exit(const char *args) {
+    (void)args; // Unused parameter
+    terminal_print("Shutting down DEA OS...\n");
+    terminal_print("Thank you for using DEA OS!\n");
+    terminal_print("System halted. You can now power off safely.\n");
+    
+    // Disable interrupts and halt the system
+    __asm__ volatile (
+        "cli\n\t"          // Clear interrupt flag
+        "hlt_loop:\n\t"    // Halt loop label
+        "hlt\n\t"          // Halt instruction
+        "jmp hlt_loop\n\t" // Jump back to halt (in case of spurious interrupt)
+        :
+        :
+        : "memory"
+    );
+}
+
 // Register all system commands
 void register_system_commands(void) {
     register_command("help", cmd_help, "Show available commands", "help [command]", "System");
@@ -135,6 +153,7 @@ void register_system_commands(void) {
     register_command("about", cmd_about, "Show system information", "about", "System");
     register_command("echo", cmd_echo, "Echo text to output", "echo [text]", "System");
     register_command("uptime", cmd_uptime, "Show system uptime", "uptime", "System");
+    register_command("exit", cmd_exit, "Exit and halt the system", "exit", "System");
     register_command("version", cmd_version, "Show detailed version info", "version", "Info");
     register_command("font", cmd_font, "Manage fonts", "font <name> | font list", "Display");
     register_command("fontinfo", cmd_fontinfo, "Show font system information", "fontinfo", "Display");
