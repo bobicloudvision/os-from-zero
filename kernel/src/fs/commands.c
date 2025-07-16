@@ -249,12 +249,12 @@ void cmd_write(const char *args) {
     }
 }
 
-// Register all filesystem commands
+// Register filesystem commands
 void register_fs_commands(void) {
-    register_command("ls", cmd_ls, "List files and directories", "ls");
-    register_command("cat", cmd_cat, "Display file contents", "cat <filename>");
-    register_command("rm", cmd_rm, "Remove a file", "rm <filename>");
-    register_command("touch", cmd_touch, "Create an empty file", "touch <filename>");
-    register_command("write", cmd_write, "Write text to a file", "write <filename> <text>");
-    register_command("df", cmd_df, "Show disk usage statistics", "df");
+    register_command("ls", cmd_ls, "List files and directories", "ls", "Filesystem");
+    register_command("cat", cmd_cat, "Display file contents", "cat <filename>", "Filesystem");
+    register_command("rm", cmd_rm, "Remove a file", "rm <filename>", "Filesystem");
+    register_command("touch", cmd_touch, "Create an empty file", "touch <filename>", "Filesystem");
+    register_command("write", cmd_write, "Write text to a file", "write <filename> <text>", "Filesystem");
+    register_command("df", cmd_df, "Show filesystem usage", "df", "Filesystem");
 } 

@@ -16,7 +16,7 @@ static command_t commands[MAX_COMMANDS];
 static size_t command_count = 0;
 
 // Register a new command
-bool register_command(const char *name, command_func_t func, const char *description, const char *usage) {
+bool register_command(const char *name, command_func_t func, const char *description, const char *usage, const char *category) {
     if (command_count >= MAX_COMMANDS) {
         return false;
     }
@@ -25,6 +25,7 @@ bool register_command(const char *name, command_func_t func, const char *descrip
     commands[command_count].func = func;
     commands[command_count].description = description;
     commands[command_count].usage = usage;
+    commands[command_count].category = category;
     command_count++;
     
     return true;
@@ -46,41 +47,48 @@ void cmd_help(const char *args) {
     
     terminal_print("Available commands:\n\n");
     
-    // Group commands by category
-    terminal_print("System Commands:\n");
+    // Collect unique categories
+    const char *categories[MAX_COMMANDS];
+    size_t category_count = 0;
+    
+    // Find all unique categories
     for (size_t i = 0; i < command_count; i++) {
-        // Check if it's a system command (starts with basic commands)
-        if (strcmp(commands[i].name, "help") == 0 || 
-            strcmp(commands[i].name, "clear") == 0 || 
-            strcmp(commands[i].name, "about") == 0 || 
-            strcmp(commands[i].name, "echo") == 0 ||
-            strcmp(commands[i].name, "uptime") == 0) {
-            terminal_print("  ");
-            terminal_print(commands[i].name);
-            terminal_print(" - ");
-            terminal_print(commands[i].description);
-            terminal_print("\n");
+        const char *category = commands[i].category;
+        bool found = false;
+        
+        // Check if we already have this category
+        for (size_t j = 0; j < category_count; j++) {
+            if (strcmp(categories[j], category) == 0) {
+                found = true;
+                break;
+            }
+        }
+        
+        // Add new category if not found
+        if (!found) {
+            categories[category_count++] = category;
         }
     }
     
-    terminal_print("\nFile System Commands:\n");
-    for (size_t i = 0; i < command_count; i++) {
-        // Check if it's a filesystem command
-        if (strcmp(commands[i].name, "ls") == 0 || 
-            strcmp(commands[i].name, "cat") == 0 || 
-            strcmp(commands[i].name, "rm") == 0 || 
-            strcmp(commands[i].name, "touch") == 0 || 
-            strcmp(commands[i].name, "write") == 0 || 
-            strcmp(commands[i].name, "df") == 0) {
-            terminal_print("  ");
-            terminal_print(commands[i].name);
-            terminal_print(" - ");
-            terminal_print(commands[i].description);
-            terminal_print("\n");
+    // Display commands grouped by category
+    for (size_t cat = 0; cat < category_count; cat++) {
+        terminal_print(categories[cat]);
+        terminal_print(" Commands:\n");
+        
+        // Show all commands in this category
+        for (size_t i = 0; i < command_count; i++) {
+            if (strcmp(commands[i].category, categories[cat]) == 0) {
+                terminal_print("  ");
+                terminal_print(commands[i].name);
+                terminal_print(" - ");
+                terminal_print(commands[i].description);
+                terminal_print("\n");
+            }
         }
+        terminal_print("\n");
     }
     
-    terminal_print("\nType 'help <command>' for detailed usage information.\n");
+    terminal_print("Type 'help <command>' for detailed usage information.\n");
 }
 
 void cmd_clear(const char *args) {
@@ -110,14 +118,23 @@ void cmd_uptime(const char *args) {
     terminal_print("System is stable and responsive!\n");
 }
 
+void cmd_version(const char *args) {
+    (void)args; // Unused parameter
+    terminal_print("DEA OS Version 0.3.1\n");
+    terminal_print("Built with dynamic command registry\n");
+    terminal_print("Compiler: x86_64-elf-gcc\n");
+    terminal_print("Architecture: x86_64\n");
+}
+
 // Register all commands
 void register_all_commands(void) {
     // System commands
-    register_command("help", cmd_help, "Show available commands", "help [command]");
-    register_command("clear", cmd_clear, "Clear the screen", "clear");
-    register_command("about", cmd_about, "Show system information", "about");
-    register_command("echo", cmd_echo, "Echo text to output", "echo [text]");
-    register_command("uptime", cmd_uptime, "Show system uptime", "uptime");
+    register_command("help", cmd_help, "Show available commands", "help [command]", "System");
+    register_command("clear", cmd_clear, "Clear the screen", "clear", "System");
+    register_command("about", cmd_about, "Show system information", "about", "System");
+    register_command("echo", cmd_echo, "Echo text to output", "echo [text]", "System");
+    register_command("uptime", cmd_uptime, "Show system uptime", "uptime", "System");
+    register_command("version", cmd_version, "Show detailed version info", "version", "Info");
     
     // Register filesystem commands
     register_fs_commands();
