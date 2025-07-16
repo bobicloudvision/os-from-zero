@@ -3,7 +3,9 @@ MAKEFLAGS += -rR
 .SUFFIXES:
 
 # Default user QEMU flags. These are appended to the QEMU command calls.
-QEMUFLAGS := -m 2G
+# PC Speaker support for audio feedback
+# Alternative audio backends: -audiodev alsa,id=audio0 (Linux) or -audiodev coreaudio,id=audio0 (macOS)
+QEMUFLAGS := -m 2G -audiodev pa,id=audio0 -machine pcspk-audiodev=audio0
 
 override IMAGE_NAME := DEA
 
@@ -27,6 +29,22 @@ run: $(IMAGE_NAME).iso
 		-cdrom $(IMAGE_NAME).iso \
 		-boot d \
 		$(QEMUFLAGS)
+
+.PHONY: run-macos
+run-macos: $(IMAGE_NAME).iso
+	qemu-system-x86_64 \
+		-M q35 \
+		-cdrom $(IMAGE_NAME).iso \
+		-boot d \
+		-m 2G -audiodev coreaudio,id=audio0 -machine pcspk-audiodev=audio0
+
+.PHONY: run-silent
+run-silent: $(IMAGE_NAME).iso
+	qemu-system-x86_64 \
+		-M q35 \
+		-cdrom $(IMAGE_NAME).iso \
+		-boot d \
+		-m 2G
 
 .PHONY: run-uefi
 run-uefi: ovmf/ovmf-code-x86_64.fd $(IMAGE_NAME).iso
