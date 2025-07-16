@@ -1,11 +1,11 @@
-#ifndef FS_COMMANDS_H
-#define FS_COMMANDS_H
+#ifndef COMMANDS_FILESYSTEM_H
+#define COMMANDS_FILESYSTEM_H
 
 #include <stdbool.h>
-#include "../system_commands.h"
+#include "system.h"
 
 // Function to register all filesystem commands
-void register_fs_commands(void);
+void register_filesystem_commands(void);
 
 // Filesystem commands
 void cmd_ls(const char *args);
@@ -15,4 +15,4 @@ void cmd_touch(const char *args);
 void cmd_write(const char *args);
 void cmd_df(const char *args);
 
-#endif // FS_COMMANDS_H 
+#endif // COMMANDS_FILESYSTEM_H 

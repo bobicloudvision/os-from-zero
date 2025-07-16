@@ -1,5 +1,5 @@
-#ifndef SYSTEM_COMMANDS_H
-#define SYSTEM_COMMANDS_H
+#ifndef COMMANDS_SYSTEM_H
+#define COMMANDS_SYSTEM_H
 
 #include <stdbool.h>
 #include <stddef.h>
@@ -32,4 +32,4 @@ void cmd_echo(const char *args);
 void cmd_uptime(const char *args);
 void cmd_version(const char *args);
 
-#endif // SYSTEM_COMMANDS_H 
+#endif // COMMANDS_SYSTEM_H 

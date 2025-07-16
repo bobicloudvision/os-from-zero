@@ -1,6 +1,6 @@
-#include "system_commands.h"
-#include "terminal.h"
-#include "string.h"
+#include "system.h"
+#include "../terminal.h"
+#include "../string.h"
 #include <stddef.h>
 
 // External command registry (defined in shell.c)

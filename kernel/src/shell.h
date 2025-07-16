@@ -3,7 +3,7 @@
 
 #include <stddef.h>
 #include <stdbool.h>
-#include "system_commands.h"
+#include "commands/system.h"
 
 // Command registry functions
 bool register_command(const char *name, command_func_t func, const char *description, const char *usage, const char *category);

@@ -1,10 +1,9 @@
 #include "shell.h"
-#include "system_commands.h"
+#include "commands/system.h"
+#include "commands/filesystem.h"
 #include "terminal.h"
 #include "keyboard.h"
 #include "string.h"
-#include "fs/filesystem.h"
-#include "fs/commands.h"
 #include <stddef.h>
 #include <stdbool.h>
 
@@ -93,7 +92,7 @@ void shell_init(void) {
     register_system_commands();
     
     // Register filesystem commands
-    register_fs_commands();
+    register_filesystem_commands();
 }
 
 // Shell main loop
