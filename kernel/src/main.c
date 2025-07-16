@@ -4,6 +4,7 @@
 #include <limine.h>
 #include "terminal.h"
 #include "keyboard.h"
+#include "mouse.h"
 #include "shell.h"
 #include "fs/filesystem.h"
 
@@ -119,6 +120,11 @@ void kmain(void) {
     // Initialize subsystems in order
     terminal_init(framebuffer);
     keyboard_init();
+    
+    // Initialize mouse and set screen bounds
+    mouse_init();
+    mouse_set_bounds(framebuffer->width, framebuffer->height);
+    
     shell_init();
     
     // Clear the screen

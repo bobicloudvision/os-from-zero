@@ -9,6 +9,10 @@ static const char scancode_to_ascii[128] = {
     '*', 0, ' '
 };
 
+// PS/2 Status register bits
+#define PS2_STATUS_OUTPUT_FULL   0x01
+#define PS2_STATUS_AUXILIARY     0x20  // Bit 5: 1 = auxiliary device (mouse), 0 = keyboard
+
 // Port I/O functions
 uint8_t inb(uint16_t port) {
     uint8_t result;
@@ -30,7 +34,19 @@ void keyboard_init(void) {
 char read_key(void) {
     while (1) {
         uint8_t status = inb(0x64);
-        if (status & 0x01) {
+        if (status & PS2_STATUS_OUTPUT_FULL) {
+            // Check if this data is from the auxiliary device (mouse)
+            if (status & PS2_STATUS_AUXILIARY) {
+                // This is mouse data, handle it properly instead of discarding
+                extern void mouse_handle_interrupt(void);
+                extern void update_mouse_cursor(void);
+                
+                mouse_handle_interrupt();
+                update_mouse_cursor();
+                continue;   // Keep waiting for keyboard data
+            }
+            
+            // This is keyboard data
             uint8_t scancode = inb(0x60);
             if (scancode < 128) {
                 char c = scancode_to_ascii[scancode];
