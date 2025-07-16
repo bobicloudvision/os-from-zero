@@ -7,8 +7,8 @@
 #include <limine.h>
 
 // Display constants
-#define CHAR_WIDTH 14
-#define CHAR_HEIGHT 14
+#define CHAR_WIDTH 16
+#define CHAR_HEIGHT 16
 #define TEXT_COLOR 0x003fb950
 #define BG_COLOR 0x0d1117
 

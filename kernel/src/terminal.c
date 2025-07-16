@@ -15,27 +15,22 @@ void terminal_init(struct limine_framebuffer *framebuffer) {
     cursor_y = 0;
 }
 
-// Function to draw a character at a specific position
+// Function to draw a character at a specific position with high quality
 void draw_char(struct limine_framebuffer *framebuffer, char c, int x, int y, uint32_t color) {
     if (c < 32 || c > 126) return; // Only printable ASCII
     
     const uint8_t *glyph = font_8x8[(unsigned char)c];
     volatile uint32_t *fb_ptr = framebuffer->address;
     
-    // Scale from 8x8 to 14x14
+    // Clean 2x scaling from 8x8 to 16x16 - each pixel becomes a 2x2 block
     for (int row = 0; row < 8; row++) {
         for (int col = 0; col < 8; col++) {
             if (glyph[row] & (1 << (7 - col))) {
-                // Scale each pixel to approximately 1.75x1.75 pixels
-                int scale_start_x = (col * 14) / 8;
-                int scale_end_x = ((col + 1) * 14) / 8;
-                int scale_start_y = (row * 14) / 8;
-                int scale_end_y = ((row + 1) * 14) / 8;
-                
-                for (int scaled_y = scale_start_y; scaled_y < scale_end_y; scaled_y++) {
-                    for (int scaled_x = scale_start_x; scaled_x < scale_end_x; scaled_x++) {
-                        int pixel_x = x + scaled_x;
-                        int pixel_y = y + scaled_y;
+                // Each source pixel becomes a 2x2 block in the output
+                for (int scale_y = 0; scale_y < 2; scale_y++) {
+                    for (int scale_x = 0; scale_x < 2; scale_x++) {
+                        int pixel_x = x + (col * 2) + scale_x;
+                        int pixel_y = y + (row * 2) + scale_y;
                         
                         if (pixel_x < (int)framebuffer->width && pixel_y < (int)framebuffer->height) {
                             fb_ptr[pixel_y * (framebuffer->pitch / 4) + pixel_x] = color;
