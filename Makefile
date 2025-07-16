@@ -1,40 +1,31 @@
-# Makefile for os-from-zero
+# Makefile for os-from-zero (64-bit, two-stage bootloader)
 
-BOOTLOADER = bootloader/boot.asm
-BOOTBIN = bootloader/boot.bin
+BOOT64 = bootloader/boot64.asm
+BOOT64BIN = bootloader/boot64.bin
+LOADER64 = bootloader/loader64.asm
+LOADER64BIN = bootloader/loader64.bin
+KERNEL64_SRC = kernel/kernel64.c
+KERNEL64_BIN = kernel/kernel64.bin
+KERNEL64_LD = kernel/linker64.ld
+OS_IMAGE64 = os-image64.bin
 
-ISO = os-from-zero.iso
+all: $(BOOT64BIN) $(LOADER64BIN) $(KERNEL64_BIN) $(OS_IMAGE64)
 
-all: $(BOOTBIN)
+$(BOOT64BIN): $(BOOT64)
+	nasm -f bin $(BOOT64) -o $(BOOT64BIN)
 
-$(BOOTBIN): $(BOOTLOADER)
-	nasm -f bin $(BOOTLOADER) -o $(BOOTBIN)
+$(LOADER64BIN): $(LOADER64)
+	nasm -f bin $(LOADER64) -o $(LOADER64BIN)
 
-check-bootbin:
-	@if [ ! -f $(BOOTBIN) ]; then \
-		echo "Error: $(BOOTBIN) not found."; exit 1; \
-	fi
-	@if [ $$(stat -f%z $(BOOTBIN)) -ne 512 ]; then \
-		echo "Error: $(BOOTBIN) is not 512 bytes."; exit 1; \
-	fi
-	@if [ $$(hexdump -v -s 510 -n 2 -e '2/1 "%02x"' $(BOOTBIN)) != "55aa" ]; then \
-		echo "Error: $(BOOTBIN) does not end with 0x55AA."; exit 1; \
-	fi
+$(KERNEL64_BIN): $(KERNEL64_SRC) $(KERNEL64_LD)
+	x86_64-elf-gcc -ffreestanding -m64 -c $(KERNEL64_SRC) -o kernel/kernel64.o
+	x86_64-elf-ld -T $(KERNEL64_LD) kernel/kernel64.o -o $(KERNEL64_BIN)
 
-iso: all check-bootbin
-	mkdir -p isofiles/boot
-	cp $(BOOTBIN) isofiles/boot/boot.bin
-	mkisofs -quiet -V 'OSFROMZERO' -input-charset iso8859-1 -boot-load-size 4 -boot-info-table -no-emul-boot -b boot/boot.bin -o $(ISO) isofiles
+$(OS_IMAGE64): $(BOOT64BIN) $(LOADER64BIN) $(KERNEL64_BIN)
+	cat $(BOOT64BIN) $(LOADER64BIN) $(KERNEL64_BIN) > $(OS_IMAGE64)
 
-run: all
-	qemu-system-i386 -drive format=raw,file=$(BOOTBIN)
-
-run-iso: iso
-	qemu-system-i386 -cdrom $(ISO)
-
-run-bootbin: all check-bootbin
-	qemu-system-i386 -drive format=raw,file=$(BOOTBIN)
+run-os-image64: $(OS_IMAGE64)
+	qemu-system-x86_64 -drive format=raw,file=$(OS_IMAGE64)
 
 clean:
-	rm -f $(BOOTBIN) $(ISO)
-	rm -rf isofiles 
+	rm -f $(BOOT64BIN) $(LOADER64BIN) $(KERNEL64_BIN) $(OS_IMAGE64) kernel/kernel64.o 
