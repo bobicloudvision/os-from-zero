@@ -30,14 +30,6 @@ run: $(IMAGE_NAME).iso
 		-boot d \
 		$(QEMUFLAGS)
 
-.PHONY: run-macos
-run-macos: $(IMAGE_NAME).iso
-	qemu-system-x86_64 \
-		-M q35 \
-		-cdrom $(IMAGE_NAME).iso \
-		-boot d \
-		-m 2G -audiodev coreaudio,id=audio0 -machine pcspk-audiodev=audio0
-
 .PHONY: run-silent
 run-silent: $(IMAGE_NAME).iso
 	qemu-system-x86_64 \
