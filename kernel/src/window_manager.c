@@ -693,4 +693,12 @@ void wm_print_window_info(window_t *window) {
     if (window->flags & WINDOW_MINIMIZED) terminal_print("MINIMIZED ");
     if (window->flags & WINDOW_MAXIMIZED) terminal_print("MAXIMIZED ");
     terminal_print("\n");
+}
+
+// Invalidate window for redraw (placeholder implementation)
+void wm_invalidate_window(window_t *window) {
+    // Simple invalidation - in a more complex system this would mark
+    // the window for redraw, but for now we can just ignore it
+    // since our widgets redraw themselves when needed
+    (void)window; // Mark parameter as used
 } 
