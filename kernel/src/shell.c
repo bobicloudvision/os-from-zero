@@ -3,11 +3,13 @@
 #include "commands/filesystem.h"
 #include "commands/audio.h"
 #include "commands/game.h"
+#include "commands/window_manager.h"
 #include "terminal.h"
 #include "keyboard.h"
 #include "mouse.h"
 #include "string.h"
 #include "audio.h"
+#include "window_manager.h"
 #include <stddef.h>
 #include <stdbool.h>
 
@@ -24,6 +26,9 @@ static void check_mouse_events(void) {
             update_mouse_cursor();
         }
     }
+    
+    // Update window manager
+    wm_update();
 }
 
 // Command registry
@@ -114,6 +119,9 @@ void shell_init(void) {
     
     // Register game commands
     init_game_commands();
+    
+    // Register window manager commands
+    register_window_manager_commands();
 }
 
 // Shell main loop
@@ -124,7 +132,8 @@ void shell_loop(void) {
     terminal_print("Move your mouse to see the cursor!\n");
     terminal_print("Try the 'mouse' command to check position!\n");
     terminal_print("Try 'beep', 'play', or 'audiotest' for audio!\n");
-    terminal_print("🎮 NEW: Play games with 'guess', 'tictactoe', or 'rps'!\n\n");
+    terminal_print("🎮 NEW: Play games with 'guess', 'tictactoe', or 'rps'!\n");
+    terminal_print("🪟 NEW: Window Manager! Try 'wdemo' or 'desktop'!\n\n");
     
     // Play startup sound
     audio_play_event(AUDIO_STARTUP_SOUND);

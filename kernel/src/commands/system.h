@@ -4,7 +4,7 @@
 #include <stdbool.h>
 #include <stddef.h>
 
-#define MAX_COMMANDS 32
+#define MAX_COMMANDS 64
 
 // Command function pointer type
 typedef void (*command_func_t)(const char *args);
@@ -31,6 +31,7 @@ void cmd_about(const char *args);
 void cmd_echo(const char *args);
 void cmd_uptime(const char *args);
 void cmd_version(const char *args);
+void cmd_cmdcount(const char *args);
 void cmd_font(const char *args);
 void cmd_fontinfo(const char *args);
 void cmd_exit(const char *args);

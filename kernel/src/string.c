@@ -25,6 +25,18 @@ char *strcpy(char *dest, const char *src) {
     return start;
 }
 
+// Copy up to n characters from string
+char *strncpy(char *dest, const char *src, size_t n) {
+    char *start = dest;
+    while (n && (*dest++ = *src++)) {
+        n--;
+    }
+    while (n--) {
+        *dest++ = '\0';
+    }
+    return start;
+}
+
 // Compare first n characters of two strings
 int strncmp(const char *s1, const char *s2, size_t n) {
     while (n && *s1 && (*s1 == *s2)) {

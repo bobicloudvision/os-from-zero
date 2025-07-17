@@ -94,6 +94,29 @@ void cmd_version(const char *args) {
     terminal_print("Architecture: x86_64\n");
 }
 
+void cmd_cmdcount(const char *args) {
+    (void)args; // Unused parameter
+    terminal_print("Command Registry Status:\n");
+    terminal_print("Commands registered: ");
+    char count_str[16];
+    int_to_string(command_count, count_str);
+    terminal_print(count_str);
+    terminal_print("/");
+    int_to_string(MAX_COMMANDS, count_str);
+    terminal_print(count_str);
+    terminal_print("\n");
+    
+    if (command_count >= MAX_COMMANDS) {
+        terminal_print("WARNING: Command registry is FULL!\n");
+        terminal_print("Some commands may not be registered.\n");
+    } else {
+        terminal_print("Registry has space for ");
+        int_to_string(MAX_COMMANDS - command_count, count_str);
+        terminal_print(count_str);
+        terminal_print(" more commands.\n");
+    }
+}
+
 void cmd_exit(const char *args) {
     (void)args; // Unused parameter
     terminal_print("Shutting down DEA OS...\n");
@@ -127,6 +150,7 @@ void register_system_commands(void) {
     register_command("uptime", cmd_uptime, "Show system uptime", "uptime", "System");
     register_command("exit", cmd_exit, "Exit and halt the system", "exit", "System");
     register_command("version", cmd_version, "Show detailed version info", "version", "Info");
+    register_command("cmdcount", cmd_cmdcount, "Show command registry status", "cmdcount", "System");
     
     // Register math commands
     register_math_commands();
