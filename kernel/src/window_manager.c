@@ -65,6 +65,16 @@ void wm_update(void) {
     bool right_button = mouse->right_button;
     bool middle_button = mouse->middle_button;
     
+    // Debug: Print mouse state changes (reduced frequency)
+    static int debug_counter = 0;
+    if (left_button != last_left_button && (debug_counter % 10) == 0) {
+        extern void terminal_print(const char *str);
+        if (left_button) {
+            terminal_print("Mouse LEFT PRESSED\n");
+        }
+    }
+    debug_counter++;
+    
     // Handle mouse button press (when button goes from not pressed to pressed)
     if (left_button && !last_left_button) {
         wm_handle_mouse_event(mouse->x, mouse->y, left_button, right_button, middle_button);
@@ -86,6 +96,10 @@ void wm_update(void) {
     last_left_button = left_button;
     last_right_button = right_button;
     last_middle_button = middle_button;
+    
+    // Ensure mouse cursor is always visible
+    extern void update_mouse_cursor(void);
+    update_mouse_cursor();
 }
 
 // Draw all windows

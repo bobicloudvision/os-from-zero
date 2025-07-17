@@ -525,56 +525,94 @@ void cmd_terminal_mode(const char *args) {
 void cmd_mouse_test(const char *args) {
     (void)args; // Unused parameter
     
-    terminal_print("Mouse Test Mode\n");
-    terminal_print("===============\n");
+    terminal_print("Simple Mouse Test Mode\n");
+    terminal_print("======================\n");
     terminal_print("Move mouse and click buttons to test functionality.\n");
-    terminal_print("Press 'q' to quit.\n\n");
+    terminal_print("Mouse state changes will be logged. Test runs for about 10 seconds.\n");
+    terminal_print("This test won't interfere with normal mouse operation.\n\n");
     
-    while (1) {
-        // Check for mouse data
-        if (mouse_has_data()) {
-            mouse_handle_interrupt();
-        }
+    // Track previous state to detect changes
+    mouse_state_t *mouse = mouse_get_state();
+    bool last_left = mouse->left_button;
+    bool last_right = mouse->right_button;
+    bool last_middle = mouse->middle_button;
+    int last_x = mouse->x;
+    int last_y = mouse->y;
+    
+    terminal_print("Initial mouse state: (");
+    char pos_str[16];
+    int_to_string(mouse->x, pos_str);
+    terminal_print(pos_str);
+    terminal_print(", ");
+    int_to_string(mouse->y, pos_str);
+    terminal_print(pos_str);
+    terminal_print(")\n");
+    
+    for (int test_count = 0; test_count < 200; test_count++) {
         
         // Get current mouse state
-        mouse_state_t *mouse = mouse_get_state();
+        mouse = mouse_get_state();
         
-        // Print mouse status
-        terminal_print("Mouse: (");
-        char pos_str[16];
-        int_to_string(mouse->x, pos_str);
-        terminal_print(pos_str);
-        terminal_print(", ");
-        int_to_string(mouse->y, pos_str);
-        terminal_print(pos_str);
-        terminal_print(") Buttons: ");
-        
-        if (mouse->left_button) terminal_print("L");
-        else terminal_print("-");
-        if (mouse->right_button) terminal_print("R");
-        else terminal_print("-");
-        if (mouse->middle_button) terminal_print("M");
-        else terminal_print("-");
-        
-        terminal_print("    \r");
-        
-        // Simple delay
-        for (volatile int i = 0; i < 100000; i++) {
-            // Check for more mouse data
-            if (mouse_has_data()) {
-                mouse_handle_interrupt();
-            }
+        // Check for state changes
+        bool changed = false;
+        if (mouse->x != last_x || mouse->y != last_y) {
+            terminal_print("Mouse moved to (");
+            int_to_string(mouse->x, pos_str);
+            terminal_print(pos_str);
+            terminal_print(", ");
+            int_to_string(mouse->y, pos_str);
+            terminal_print(pos_str);
+            terminal_print(")\n");
+            last_x = mouse->x;
+            last_y = mouse->y;
+            changed = true;
         }
         
-        // Check for 'q' key (simplified)
-        // In real implementation, you'd need proper keyboard handling
-        // For now, just run for a bit then exit
-        static int test_count = 0;
-        if (++test_count > 100) {
-            terminal_print("\nMouse test completed.\n");
-            break;
+        if (mouse->left_button != last_left) {
+            if (mouse->left_button) {
+                terminal_print("LEFT button PRESSED\n");
+            } else {
+                terminal_print("LEFT button RELEASED\n");
+            }
+            last_left = mouse->left_button;
+            changed = true;
+        }
+        
+        if (mouse->right_button != last_right) {
+            if (mouse->right_button) {
+                terminal_print("RIGHT button PRESSED\n");
+            } else {
+                terminal_print("RIGHT button RELEASED\n");
+            }
+            last_right = mouse->right_button;
+            changed = true;
+        }
+        
+        if (mouse->middle_button != last_middle) {
+            if (mouse->middle_button) {
+                terminal_print("MIDDLE button PRESSED\n");
+            } else {
+                terminal_print("MIDDLE button RELEASED\n");
+            }
+            last_middle = mouse->middle_button;
+            changed = true;
+        }
+        
+        // Show status every 40 iterations (about 2 seconds)
+        if (!changed && (test_count % 40) == 0 && test_count > 0) {
+            terminal_print("Mouse test running... (iteration: ");
+            int_to_string(test_count, pos_str);
+            terminal_print(pos_str);
+            terminal_print("/200)\n");
+        }
+        
+        // Reasonable delay without blocking (about 50ms per iteration)
+        for (volatile int i = 0; i < 500000; i++) {
+            __asm__ volatile ("nop");
         }
     }
+    
+    terminal_print("\nMouse test completed.\n");
 }
 
 // Command: debug window
