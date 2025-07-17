@@ -4,6 +4,7 @@
 #include "commands/audio.h"
 #include "commands/game.h"
 #include "commands/window_manager.h"
+#include "commands/execution.h"
 #include "terminal.h"
 #include "keyboard.h"
 #include "mouse.h"
@@ -122,6 +123,9 @@ void shell_init(void) {
     
     // Register window manager commands
     register_window_manager_commands();
+    
+    // Register execution commands
+    register_execution_commands();
 }
 
 // Shell main loop
@@ -133,7 +137,8 @@ void shell_loop(void) {
     terminal_print("Try the 'mouse' command to check position!\n");
     terminal_print("Try 'beep', 'play', or 'audiotest' for audio!\n");
     terminal_print("🎮 NEW: Play games with 'guess', 'tictactoe', or 'rps'!\n");
-    terminal_print("🪟 NEW: Window Manager! Try 'wdemo' or 'desktop'!\n\n");
+    terminal_print("🪟 NEW: Window Manager! Try 'wdemo' or 'desktop'!\n");
+    terminal_print("💻 NEW: Program Execution! Try 'compile hello.elf' then 'exec hello.elf'!\n\n");
     
     // Play startup sound
     audio_play_event(AUDIO_STARTUP_SOUND);

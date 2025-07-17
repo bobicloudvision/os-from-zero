@@ -1,6 +1,9 @@
 #include "filesystem.h"
 #include "../string.h"
 
+// Forward declaration for strlen (defined in string.c)
+size_t strlen(const char *s);
+
 // Global file system storage
 static file_t files[MAX_FILES];
 static bool fs_initialized = false;
@@ -41,6 +44,36 @@ static void fs_create_default_files(void) {
     // Create readme file
     if (fs_create_file("readme.txt", FILE_TYPE_REGULAR)) {
         fs_write_file("readme.txt", (uint8_t*)"DEA OS File System\n\nCommands:\n- ls\n- cat\n- touch\n- rm\n- write\n- df\n", 70);
+    }
+    
+    // Add compiled Hello World programs
+    // Note: In a real OS, you'd load these from disk
+    
+    // C Hello World (simplified for testing)
+    if (fs_create_file("hello_c.elf", FILE_TYPE_REGULAR)) {
+        // This is a simplified test - you'd normally load the full ELF file
+        const char* c_message = "Hello World from C program!\nThis would be a real ELF file in production.\n";
+        fs_write_file("hello_c.elf", (const uint8_t*)c_message, strlen(c_message));
+    }
+    
+    // Assembly Hello World (simplified for testing)  
+    if (fs_create_file("hello_asm.elf", FILE_TYPE_REGULAR)) {
+        const char* asm_message = "Hello World from Assembly!\nThis would be a real ELF file in production.\n";
+        fs_write_file("hello_asm.elf", (const uint8_t*)asm_message, strlen(asm_message));
+    }
+    
+    // Demo instruction file
+    if (fs_create_file("demo.txt", FILE_TYPE_REGULAR)) {
+        const char* demo_text = 
+            "DEA OS Program Execution Demo\n"
+            "============================\n\n"
+            "Try these commands:\n"
+            "1. compile hello.elf    - Create test program\n"
+            "2. exec hello.elf       - Run the program\n"
+            "3. ps                   - List processes\n"
+            "4. ls                   - See all files\n\n"
+            "Your OS can now execute programs!\n";
+        fs_write_file("demo.txt", (const uint8_t*)demo_text, strlen(demo_text));
     }
 }
 

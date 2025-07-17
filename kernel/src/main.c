@@ -6,7 +6,8 @@
 #include "keyboard.h"
 #include "mouse.h"
 #include "shell.h"
-// #include "fs/filesystem.h"
+#include "fs/filesystem.h"
+#include "process.h"
 #include "audio.h"
 #include "fpu_simple.h"
 #include "window_manager.h"
@@ -213,6 +214,10 @@ void kmain(void) {
     // Initialize window manager
     wm_init(framebuffer);
     
+    // Initialize filesystem and process system
+    fs_init();
+    process_init();
+    
     shell_init();
     
     // Clear the screen
@@ -273,8 +278,7 @@ void kmain(void) {
     terminal_print(")\n");
     terminal_print("============================\n\n");
     
-    // Initialize filesystem after other subsystems are ready
-    // fs_init(); // Commented out to avoid boot issues
+    // Filesystem and process system already initialized above
 
     // Start the shell
     shell_loop();
