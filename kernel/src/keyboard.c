@@ -40,9 +40,11 @@ char read_key(void) {
                 // This is mouse data, handle it properly instead of discarding
                 extern void mouse_handle_interrupt(void);
                 extern void update_mouse_cursor(void);
+                extern void wm_update(void);
                 
                 mouse_handle_interrupt();
                 update_mouse_cursor();
+                wm_update();  // ← Add window manager update for click detection!
                 continue;   // Keep waiting for keyboard data
             }
             
