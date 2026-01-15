@@ -39,7 +39,8 @@ static void check_mouse_events(void) {
     // Always handle mouse (for click detection even without windows)
     wm_handle_mouse(mouse->x, mouse->y, mouse->left_button);
     
-    // Update window manager (only if windows exist)
+    // Update window manager (only if windows exist and something changed)
+    // The update function will check internally if rendering is needed
     if (wm_get_window_count() > 0) {
         wm_update();
     }

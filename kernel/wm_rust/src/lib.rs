@@ -57,6 +57,15 @@ pub struct Window {
 // Window manager state
 static mut WM_STATE: Option<WindowManager> = None;
 
+// Track previous window positions for proper erasing
+#[derive(Copy, Clone)]
+struct WindowPosition {
+    x: i32,
+    y: i32,
+    width: u32,
+    height: u32,
+}
+
 struct WindowManager {
     framebuffer: *mut LimineFramebuffer,
     windows: [Option<*mut Window>; 32],
@@ -67,6 +76,8 @@ struct WindowManager {
     drag_offset_y: i32,
     desktop_color: u32,
     last_mouse_button: bool,  // Track previous button state for click detection
+    desktop_cleared: bool,    // Track if desktop has been cleared (only clear once)
+    previous_positions: [Option<WindowPosition>; 32], // Track previous window positions
 }
 
 impl WindowManager {
@@ -81,6 +92,8 @@ impl WindowManager {
             drag_offset_y: 0,
             desktop_color: 0x0d1117, // Match terminal background (dark gray)
             last_mouse_button: false,
+            desktop_cleared: false,
+            previous_positions: [const { None }; 32],
         }
     }
 
@@ -159,6 +172,15 @@ impl WindowManager {
         };
 
         self.windows[self.window_count] = Some(window);
+        // Initialize previous position
+        unsafe {
+            self.previous_positions[self.window_count] = Some(WindowPosition {
+                x: (*window).x,
+                y: (*window).y,
+                width: (*window).width,
+                height: (*window).height,
+            });
+        }
         self.window_count += 1;
         self.focused_window = Some(window);
         unsafe { 
@@ -170,14 +192,25 @@ impl WindowManager {
     }
 
     fn destroy_window(&mut self, window: *mut Window) {
+        unsafe {
+            let fb = self.get_framebuffer();
+            if !fb.is_null() {
+                // Erase window area from framebuffer
+                self.erase_window_area(fb, (*window).x, (*window).y, (*window).width, (*window).height);
+            }
+        }
+        
         for i in 0..self.window_count {
             if let Some(w) = self.windows[i] {
                 if w == window {
                     // Remove from array
                     for j in i..self.window_count - 1 {
                         self.windows[j] = self.windows[j + 1];
+                        // Also shift previous positions
+                        self.previous_positions[j] = self.previous_positions[j + 1];
                     }
                     self.windows[self.window_count - 1] = None;
+                    self.previous_positions[self.window_count - 1] = None;
                     self.window_count -= 1;
                     
                     if self.focused_window == Some(window) {
@@ -290,6 +323,10 @@ impl WindowManager {
     }
 
     fn handle_mouse(&mut self, mouse_x: i32, mouse_y: i32, left_button: bool) {
+        // Track button state for press detection
+        let button_just_pressed = left_button && !self.last_mouse_button;
+        self.last_mouse_button = left_button;
+        
         // Check if we're dragging - continue dragging while button is held
         if let Some(dragging) = self.dragging_window {
             if left_button {
@@ -324,18 +361,12 @@ impl WindowManager {
                 // Button released - stop dragging
                 self.dragging_window = None;
             }
-            self.last_mouse_button = left_button;
             return;
         }
 
         // Check for window focus and drag start
-        // Track button state for press detection
-        let button_just_pressed = left_button && !self.last_mouse_button;
-        self.last_mouse_button = left_button;
-        
-        // Check windows on button press (transition from not pressed to pressed)
-        // Also check if button is held and we're not dragging (fallback for missed presses)
-        if button_just_pressed || (left_button && self.dragging_window.is_none()) {
+        // Only check on button press (transition from not pressed to pressed)
+        if button_just_pressed {
             // Check windows in reverse order (top to bottom)
             for i in (0..self.window_count).rev() {
                 if let Some(window) = self.windows[i] {
@@ -350,9 +381,9 @@ impl WindowManager {
                         if mouse_x >= wx && mouse_x < wx + ww &&
                            mouse_y >= wy && mouse_y < wy + wh {
                             
-                            // Check if click is on close button (relative to window)
-                            // Only close on actual press, not on hold
-                            if button_just_pressed && ((*window).flags & WINDOW_CLOSABLE) != 0 {
+                            // Check if click is on close button FIRST (before checking title bar)
+                            // Close button takes priority over dragging
+                            if ((*window).flags & WINDOW_CLOSABLE) != 0 {
                                 let close_x_start = wx + (*window).width as i32 - 18;
                                 let close_x_end = close_x_start + 16;
                                 let close_y_start = wy + 2;
@@ -371,7 +402,7 @@ impl WindowManager {
                             let title_bar_y_end = wy + 20;
                             
                             if mouse_y >= title_bar_y_start && mouse_y < title_bar_y_end {
-                                // Focus this window (always on any click in title bar)
+                                // Focus this window
                                 if let Some(old_focused) = self.focused_window {
                                     if old_focused != window {
                                         (*old_focused).focused = false;
@@ -382,15 +413,12 @@ impl WindowManager {
                                 (*window).focused = true;
                                 (*window).invalidated = true;
                                 
-                                // Start dragging if window is movable and button is pressed
-                                // Use button_just_pressed for initial drag, but also allow if button held
+                                // Start dragging if window is movable
                                 if ((*window).flags & WINDOW_MOVABLE) != 0 {
-                                    if self.dragging_window.is_none() {
-                                        self.dragging_window = Some(window);
-                                        // Calculate offset from window origin (where in title bar we clicked)
-                                        self.drag_offset_x = mouse_x - wx;
-                                        self.drag_offset_y = mouse_y - wy;
-                                    }
+                                    self.dragging_window = Some(window);
+                                    // Calculate offset from window origin (where in title bar we clicked)
+                                    self.drag_offset_x = mouse_x - wx;
+                                    self.drag_offset_y = mouse_y - wy;
                                 }
                             }
                             break; // Stop checking other windows (topmost window gets the click)
@@ -414,22 +442,46 @@ impl WindowManager {
                 return;
             }
             
-            // Draw desktop background only when we have windows
-            let fb_ptr = (*fb).address;
-            let pitch = (*fb).pitch as usize / 4;
-            let width = (*fb).width as usize;
-            let height = (*fb).height as usize;
-            
-            for y in 0..height {
-                for x in 0..width {
-                    *fb_ptr.add(y * pitch + x) = self.desktop_color;
+
+            // Clear desktop background only once when first window is created
+            if !self.desktop_cleared {
+                let fb_ptr = (*fb).address;
+                let pitch = (*fb).pitch as usize / 4;
+                let width = (*fb).width as usize;
+                let height = (*fb).height as usize;
+                
+                for y in 0..height {
+                    for x in 0..width {
+                        *fb_ptr.add(y * pitch + x) = self.desktop_color;
+                    }
                 }
+                self.desktop_cleared = true;
             }
             
-            // Draw all windows
+            // Draw all windows (only invalidated windows will redraw their buffers)
             for i in 0..self.window_count {
                 if let Some(window) = self.windows[i] {
                     self.render_window(window, fb);
+                }
+            }
+        }
+    }
+
+    fn erase_window_area(&mut self, fb: *mut LimineFramebuffer, x: i32, y: i32, width: u32, height: u32) {
+        unsafe {
+            let fb_ptr = (*fb).address;
+            let pitch = (*fb).pitch as usize / 4;
+            let fb_w = (*fb).width as usize;
+            let fb_h = (*fb).height as usize;
+            
+            let start_x = if x < 0 { 0 } else { x as usize };
+            let start_y = if y < 0 { 0 } else { y as usize };
+            let end_x = if (x + width as i32) as usize > fb_w { fb_w } else { (x + width as i32) as usize };
+            let end_y = if (y + height as i32) as usize > fb_h { fb_h } else { (y + height as i32) as usize };
+            
+            for fy in start_y..end_y {
+                for fx in start_x..end_x {
+                    *fb_ptr.add(fy * pitch + fx) = self.desktop_color;
                 }
             }
         }
@@ -439,6 +491,38 @@ impl WindowManager {
         unsafe {
             if (*window).buffer.is_null() {
                 return; // Can't render without a buffer
+            }
+            
+            // Find window index to get previous position
+            let mut window_idx = None;
+            for i in 0..self.window_count {
+                if self.windows[i] == Some(window) {
+                    window_idx = Some(i);
+                    break;
+                }
+            }
+            
+            let current_x = (*window).x;
+            let current_y = (*window).y;
+            let current_w = (*window).width;
+            let current_h = (*window).height;
+            
+            // Erase old position if window moved
+            if let Some(idx) = window_idx {
+                if let Some(ref prev_pos) = self.previous_positions[idx] {
+                    if prev_pos.x != current_x || prev_pos.y != current_y ||
+                       prev_pos.width != current_w || prev_pos.height != current_h {
+                        // Window moved or resized - erase old position
+                        self.erase_window_area(fb, prev_pos.x, prev_pos.y, prev_pos.width, prev_pos.height);
+                    }
+                }
+                // Update previous position
+                self.previous_positions[idx] = Some(WindowPosition {
+                    x: current_x,
+                    y: current_y,
+                    width: current_w,
+                    height: current_h,
+                });
             }
             
             if (*window).invalidated {
@@ -504,8 +588,34 @@ impl WindowManager {
     }
 
     fn update(&mut self) {
-        // Render all windows (mouse handling is done via handle_mouse which is called externally)
-        self.render();
+        // Only render if we have windows
+        if self.window_count == 0 {
+            return;
+        }
+        
+        // Always render when dragging (for smooth movement)
+        // Also render if any window is invalidated
+        let needs_render = unsafe {
+            if self.dragging_window.is_some() {
+                true // Always render when dragging
+            } else {
+                // Check if any window needs rendering
+                let mut needs = false;
+                for i in 0..self.window_count {
+                    if let Some(window) = self.windows[i] {
+                        if (*window).invalidated {
+                            needs = true;
+                            break;
+                        }
+                    }
+                }
+                needs
+            }
+        };
+        
+        if needs_render {
+            self.render();
+        }
     }
 }
 
