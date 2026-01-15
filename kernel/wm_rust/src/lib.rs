@@ -94,52 +94,56 @@ impl WindowManager {
         // Allocate window structure
         let window = unsafe {
             // Simple static allocation for now (in real OS, use proper allocator)
-            static mut WINDOW_POOL: [Window; 32] = [Window {
-                id: 0,
-                x: 0,
-                y: 0,
-                width: 0,
-                height: 0,
+            static mut WINDOW_POOL: [Option<Window>; 32] = [const { None }; 32];
+            
+            // Find an empty slot
+            let mut slot_idx = None;
+            for i in 0..32 {
+                if WINDOW_POOL[i].is_none() {
+                    slot_idx = Some(i);
+                    break;
+                }
+            }
+            
+            let slot = match slot_idx {
+                Some(idx) => idx,
+                None => return ptr::null_mut(), // No free slots
+            };
+            
+            // Initialize window in the slot
+            let mut new_window = Window {
+                id: self.window_count as u32,
+                x: x,
+                y: y,
+                width: width,
+                height: height,
                 title: [0; 64],
-                flags: 0,
+                flags: flags,
                 focused: false,
                 invalidated: true,
                 draw_callback: None,
                 user_data: ptr::null_mut(),
                 buffer: ptr::null_mut(),
-            }; 32];
-            
-            let window_ptr = &mut WINDOW_POOL[self.window_count] as *mut Window;
-            
-            // Initialize window
-            (*window_ptr).id = self.window_count as u32;
-            (*window_ptr).x = x;
-            (*window_ptr).y = y;
-            (*window_ptr).width = width;
-            (*window_ptr).height = height;
-            (*window_ptr).flags = flags;
-            (*window_ptr).focused = false;
-            (*window_ptr).invalidated = true;
-            (*window_ptr).draw_callback = None;
-            (*window_ptr).user_data = ptr::null_mut();
+            };
             
             // Copy title
             let mut i = 0;
             let title_bytes = title as *const u8;
-            while i < 63 && unsafe { *title_bytes.add(i) } != 0 {
-                (*window_ptr).title[i] = unsafe { *title_bytes.add(i) };
+            while i < 63 && *title_bytes.add(i) != 0 {
+                new_window.title[i] = *title_bytes.add(i);
                 i += 1;
             }
-            (*window_ptr).title[i] = 0;
+            new_window.title[i] = 0;
             
             // Allocate window buffer
             let buffer_size = (width * height) as usize;
             static mut BUFFER_POOL: [u32; 1024 * 768] = [0; 1024 * 768];
             if buffer_size <= BUFFER_POOL.len() {
-                (*window_ptr).buffer = BUFFER_POOL.as_mut_ptr();
+                new_window.buffer = BUFFER_POOL.as_mut_ptr();
             }
             
-            window_ptr
+            WINDOW_POOL[slot] = Some(new_window);
+            WINDOW_POOL[slot].as_mut().unwrap() as *mut Window
         };
 
         self.windows[self.window_count] = Some(window);
@@ -308,7 +312,7 @@ impl WindowManager {
                         let wx = (*window).x;
                         let wy = (*window).y;
                         let ww = (*window).width as i32;
-                        let wh = (*window).height as i32;
+                        let _wh = (*window).height as i32;
                         
                         // Check if click is in title bar (top 20 pixels)
                         if mouse_x >= wx && mouse_x < wx + ww &&

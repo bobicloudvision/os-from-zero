@@ -131,9 +131,11 @@ override NASMFILES := $(filter %.asm,$(SRCFILES))
 override OBJ := $(addprefix obj/,$(CFILES:.c=.c.o) $(ASFILES:.S=.S.o) $(NASMFILES:.asm=.asm.o))
 override HEADER_DEPS := $(addprefix obj/,$(CFILES:.c=.c.d) $(ASFILES:.S=.S.d))
 
-# Add Rust library to objects if available
+# Add Rust library to objects - required for window manager
 ifeq ($(RUST_AVAILABLE),yes)
 override OBJ += $(RUST_LIB)
+else
+$(error Rust is required but not found. Please install Rust: curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh && rustup target add x86_64-unknown-none)
 endif
 
 # Default target. This must come first, before header dependencies.
@@ -145,14 +147,8 @@ all: bin/$(OUTPUT)
 rust-lib: $(RUST_LIB)
 
 $(RUST_LIB): wm_rust/Cargo.toml wm_rust/src/lib.rs
-ifeq ($(RUST_AVAILABLE),yes)
 	@echo "Building Rust window manager..."
 	cd wm_rust && $(CARGO) build --release --target x86_64-unknown-none
-else
-	@echo "Warning: Rust not available, skipping Rust window manager"
-	@mkdir -p $(dir $(RUST_LIB))
-	@touch $(RUST_LIB)
-endif
 
 # Include header dependencies.
 -include $(HEADER_DEPS)
