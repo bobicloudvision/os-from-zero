@@ -10,6 +10,26 @@ fn panic(_info: &core::panic::PanicInfo) -> ! {
 use core::ptr;
 use core::ffi::{c_char, c_int, c_void};
 
+// External GPU functions
+extern "C" {
+    fn gpu_is_available() -> bool;
+    fn gpu_blit(
+        dst: *mut u32,
+        dst_pitch: u32,
+        src: *const u32,
+        src_pitch: u32,
+        width: u32,
+        height: u32,
+    );
+    fn gpu_render_to_framebuffer(
+        src: *const u32,
+        src_width: u32,
+        src_height: u32,
+        dst_x: i32,
+        dst_y: i32,
+    ) -> bool;
+}
+
 // Limine framebuffer structure (must match C struct)
 #[repr(C)]
 pub struct LimineFramebuffer {
@@ -1246,6 +1266,7 @@ impl WindowManager {
     }
     
     // Copy backbuffer to framebuffer (only dirty region)
+    // Uses GPU acceleration if available
     fn copy_backbuffer_to_framebuffer(&self, dirty: &DirtyRect) {
         unsafe {
             let fb = self.get_framebuffer();
@@ -1270,9 +1291,31 @@ impl WindowManager {
             let end_x = ((dirty.x + dirty.width as i32).min(fb_width as i32)).max(0) as usize;
             let end_y = ((dirty.y + dirty.height as i32).min(fb_height as i32)).max(0) as usize;
             
-            // Fast row-by-row copy
+            let width = end_x - start_x;
+            let height = end_y - start_y;
+            
+            if width == 0 || height == 0 {
+                return;
+            }
+            
+            // Try GPU-accelerated rendering first
+            if gpu_is_available() {
+                // Use GPU blit for the dirty region
+                let src_region = backbuffer.add(start_y * bb_width + start_x);
+                let dst_region = fb_ptr.add(start_y * fb_pitch + start_x);
+                gpu_blit(
+                    dst_region,
+                    fb_pitch as u32,
+                    src_region,
+                    bb_width as u32,
+                    width as u32,
+                    height as u32,
+                );
+                return; // GPU rendering succeeded
+            }
+            
+            // Fallback to CPU-based row-by-row copy
             for y in start_y..end_y {
-                let width = end_x - start_x;
                 if width > 0 {
                     let src = backbuffer.add(y * bb_width + start_x);
                     let dst = fb_ptr.add(y * fb_pitch + start_x);

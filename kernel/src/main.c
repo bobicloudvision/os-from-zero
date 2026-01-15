@@ -11,6 +11,8 @@
 #include "audio.h"
 #include "fpu_simple.h"
 #include "window_manager_rust.h"
+#include "pci.h"
+#include "gpu_rust.h"
 
 // Global framebuffer pointer for graphics3d system
 struct limine_framebuffer *g_framebuffer = NULL;
@@ -210,6 +212,12 @@ void kmain(void) {
     
     // Success beep to indicate video is working
     audio_play_event(AUDIO_STARTUP_SOUND);
+    
+    // Enumerate PCI devices (for GPU detection)
+    pci_enumerate();
+    
+    // Initialize GPU rendering system
+    gpu_init(framebuffer->address, framebuffer->width, framebuffer->height, framebuffer->pitch / 4);
     
     // Initialize Rust window manager
     wm_init(framebuffer);

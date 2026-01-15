@@ -1,3 +1,4 @@
 /.idea
 /kernel/wm_rust/target
 /kernel/fs_rust/target
+/kernel/gpu_rust/target
