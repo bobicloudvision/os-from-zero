@@ -29,6 +29,7 @@ run: $(IMAGE_NAME).iso
 		-M q35 \
 		-cdrom $(IMAGE_NAME).iso \
 		-boot d \
+		-device virtio-gpu-pci \
 		$(QEMUFLAGS)
 
 .PHONY: run-silent

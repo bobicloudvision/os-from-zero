@@ -1,4 +1,5 @@
 #include "pci.h"
+#include <stddef.h>
 
 // PCI Configuration Space Access Ports
 #define PCI_CONFIG_ADDRESS  0xCF8
@@ -49,7 +50,7 @@ void pci_enumerate(void) {
     pci_device_count = 0;
     
     // Scan all buses (0-255), devices (0-31), and functions (0-7)
-    for (uint8_t bus = 0; bus < 256; bus++) {
+    for (int bus = 0; bus < 256; bus++) {
         for (uint8_t device = 0; device < 32; device++) {
             // Check if device exists
             if (!pci_device_exists(bus, device, 0)) {

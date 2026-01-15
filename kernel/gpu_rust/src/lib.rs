@@ -196,8 +196,6 @@ pub extern "C" fn gpu_clear(buffer: *mut u32, width: u32, height: u32, color: u3
             return;
         }
         
-        let size = (width * height) as usize;
-        
         // Fill first row
         for x in 0..width as usize {
             *buffer.add(x) = color;
