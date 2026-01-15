@@ -151,9 +151,9 @@ impl WindowManager {
             new_window.title[i] = 0;
             
             // Allocate window buffer - each window gets its own buffer
-            // Use a reasonable max size (800x600 = 480000 pixels)
+            // Support HD resolutions: 1920x1080 = 2,073,600 pixels
             let buffer_size = (width * height) as usize;
-            const MAX_BUFFER_SIZE: usize = 800 * 600;
+            const MAX_BUFFER_SIZE: usize = 1920 * 1080; // HD support
             static mut BUFFER_POOL: [[u32; MAX_BUFFER_SIZE]; 32] = [[0; MAX_BUFFER_SIZE]; 32];
             if buffer_size <= MAX_BUFFER_SIZE {
                 new_window.buffer = BUFFER_POOL[slot].as_mut_ptr();
@@ -442,14 +442,14 @@ impl WindowManager {
                 return;
             }
             
-
+            let width = (*fb).width as usize;
+            let height = (*fb).height as usize;
+            let pitch = (*fb).pitch as usize / 4;
+            
+            // Optimized: Direct rendering - much faster than double buffering
             // Clear desktop background only once when first window is created
             if !self.desktop_cleared {
                 let fb_ptr = (*fb).address;
-                let pitch = (*fb).pitch as usize / 4;
-                let width = (*fb).width as usize;
-                let height = (*fb).height as usize;
-                
                 for y in 0..height {
                     for x in 0..width {
                         *fb_ptr.add(y * pitch + x) = self.desktop_color;
@@ -459,6 +459,7 @@ impl WindowManager {
             }
             
             // Draw all windows (only invalidated windows will redraw their buffers)
+            // This is optimized - we only update what changed
             for i in 0..self.window_count {
                 if let Some(window) = self.windows[i] {
                     self.render_window(window, fb);
@@ -466,6 +467,7 @@ impl WindowManager {
             }
         }
     }
+    
 
     fn erase_window_area(&mut self, fb: *mut LimineFramebuffer, x: i32, y: i32, width: u32, height: u32) {
         unsafe {
@@ -485,7 +487,9 @@ impl WindowManager {
                 }
             }
         }
+
     }
+    
 
     fn render_window(&mut self, window: *mut Window, fb: *mut LimineFramebuffer) {
         unsafe {
@@ -593,13 +597,14 @@ impl WindowManager {
             return;
         }
         
-        // Always render when dragging (for smooth movement)
-        // Also render if any window is invalidated
+        // Optimized: Only render when something actually changed
+        // Check if any window needs rendering (invalidated or being dragged)
         let needs_render = unsafe {
+            // Always render when dragging (for smooth movement)
             if self.dragging_window.is_some() {
-                true // Always render when dragging
+                true
             } else {
-                // Check if any window needs rendering
+                // Check if any window is invalidated
                 let mut needs = false;
                 for i in 0..self.window_count {
                     if let Some(window) = self.windows[i] {
