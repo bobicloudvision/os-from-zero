@@ -71,15 +71,6 @@ struct WindowPosition {
     height: u32,
 }
 
-// Dirty rectangle tracking for optimized rendering
-#[derive(Copy, Clone)]
-struct DirtyRect {
-    x: i32,
-    y: i32,
-    width: u32,
-    height: u32,
-}
-
 struct WindowManager {
     framebuffer: *mut LimineFramebuffer,
     windows: [Option<*mut Window>; 32],
@@ -98,8 +89,7 @@ struct WindowManager {
     last_cursor_y: i32,        // Previous cursor Y position (for clearing)
     cursor_backup: [u32; (12 + 2) * (16 + 2)], // Backup pixels under cursor (including outline)
     cursor_backup_valid: bool, // Whether cursor backup is valid
-    dirty_rects: [Option<DirtyRect>; 32], // Track dirty regions for optimized rendering
-    last_click_time: u64,      // Timestamp of last click for double-click detection
+    last_click_time: u64,      // Timestamp of last click for double-click detection (requires timer)
     last_click_x: i32,         // X position of last click
     last_click_y: i32,         // Y position of last click
 }
@@ -124,7 +114,6 @@ impl WindowManager {
             last_cursor_y: -1,
             cursor_backup: [0; (12 + 2) * (16 + 2)],
             cursor_backup_valid: false,
-            dirty_rects: [const { None }; 32],
             last_click_time: 0,
             last_click_x: 0,
             last_click_y: 0,
@@ -145,32 +134,6 @@ impl WindowManager {
         }
     }
 
-    // Mark a region as dirty for optimized rendering
-    fn mark_dirty(&mut self, x: i32, y: i32, width: u32, height: u32) {
-        // Find an empty slot or merge with existing dirty rects
-        for i in 0..32 {
-            if let Some(ref mut rect) = self.dirty_rects[i] {
-                // Try to merge if overlapping or adjacent
-                if x <= (rect.x + rect.width as i32) && (x + width as i32) >= rect.x &&
-                    y <= (rect.y + rect.height as i32) && (y + height as i32) >= rect.y {
-                    // Merge rectangles
-                    let min_x = core::cmp::min(rect.x, x);
-                    let min_y = core::cmp::min(rect.y, y);
-                    let max_x = core::cmp::max(rect.x + rect.width as i32, x + width as i32);
-                    let max_y = core::cmp::max(rect.y + rect.height as i32, y + height as i32);
-                    rect.x = min_x;
-                    rect.y = min_y;
-                    rect.width = (max_x - min_x) as u32;
-                    rect.height = (max_y - min_y) as u32;
-                    return;
-                }
-            } else {
-                // Empty slot, use it
-                self.dirty_rects[i] = Some(DirtyRect { x, y, width, height });
-                return;
-            }
-        }
-    }
 
     // Bring window to front (top of Z-order)
     fn bring_to_front(&mut self, window: *mut Window) {
@@ -207,7 +170,11 @@ impl WindowManager {
     // Resize window support
     fn resize_window(&mut self, window: *mut Window, new_width: u32, new_height: u32) {
         unsafe {
-            // Validate new size
+            // Validate new size - check for zero and maximum bounds
+            if new_width == 0 || new_height == 0 {
+                return; // Invalid size
+            }
+            
             let buffer_size = (new_width * new_height) as usize;
             if buffer_size > MAX_BUFFER_SIZE {
                 return; // Too large
@@ -228,13 +195,15 @@ impl WindowManager {
             // Update dimensions
             (*window).width = new_width;
             (*window).height = new_height;
-            (*window).invalidated = true;
+            (*window).invalidated = true; // Auto-invalidate to trigger re-render
             
-            // Clear new size
-            let new_size = buffer_size;
-            for i in 0..new_size {
+            // Clear new buffer area
+            for i in 0..buffer_size {
                 *(*window).buffer.add(i) = 0;
             }
+            
+            // Force immediate re-render after resize
+            self.render();
         }
     }
 
@@ -365,12 +334,26 @@ impl WindowManager {
                         self.dragging_window = None;
                     }
                     
-                    // Invalidate all remaining windows to force a full re-render
-                    // This ensures windows that were behind the destroyed window are properly redrawn
-                    for j in 0..self.window_count {
-                        if let Some(remaining_window) = self.windows[j] {
-                            unsafe {
-                                (*remaining_window).invalidated = true;
+                    // Invalidate only windows that overlapped with the destroyed window
+                    // This is more efficient than invalidating all windows
+                    unsafe {
+                        let destroyed_x = (*window).x;
+                        let destroyed_y = (*window).y;
+                        let destroyed_w = (*window).width as i32;
+                        let destroyed_h = (*window).height as i32;
+                        
+                        for j in 0..self.window_count {
+                            if let Some(remaining_window) = self.windows[j] {
+                                let rem_x = (*remaining_window).x;
+                                let rem_y = (*remaining_window).y;
+                                let rem_w = (*remaining_window).width as i32;
+                                let rem_h = (*remaining_window).height as i32;
+                                
+                                // Check if windows overlap
+                                if !(rem_x + rem_w <= destroyed_x || rem_x >= destroyed_x + destroyed_w ||
+                                     rem_y + rem_h <= destroyed_y || rem_y >= destroyed_y + destroyed_h) {
+                                    (*remaining_window).invalidated = true;
+                                }
                             }
                         }
                     }
@@ -495,32 +478,12 @@ impl WindowManager {
         // Track button state for press detection
         let button_just_pressed = left_button && !self.last_mouse_button;
         
-        // Double-click detection
-        const DOUBLE_CLICK_TIME_MS: u64 = 500;
-        const DOUBLE_CLICK_DISTANCE: i32 = 5;
-        
+        // Store click position for potential future double-click detection
+        // TODO: Double-click detection requires a real timer source (e.g., RTC or PIT)
+        // When timer is available, implement double-click by checking:
+        // - Time difference between clicks < threshold (e.g., 500ms)
+        // - Distance between clicks < threshold (e.g., 5 pixels)
         if button_just_pressed {
-            // Get current timestamp (simplified - in real OS you'd use a timer)
-            // For now, we'll use a simple counter that increments
-            let current_time = self.last_click_time.wrapping_add(1);
-            
-            // Check for double-click
-            let time_diff = current_time.saturating_sub(self.last_click_time);
-            let dx = mouse_x - self.last_click_x;
-            let dy = mouse_y - self.last_click_y;
-            // Use squared distance comparison to avoid sqrt (not available in no_std)
-            let distance_sq = dx * dx + dy * dy;
-            let max_distance_sq = DOUBLE_CLICK_DISTANCE * DOUBLE_CLICK_DISTANCE;
-            
-            if time_diff < DOUBLE_CLICK_TIME_MS && distance_sq < max_distance_sq {
-                // Double-click detected - could trigger maximize or other action
-                // For now, just bring window to front
-                if let Some(window) = self.focused_window {
-                    self.bring_to_front(window);
-                }
-            }
-            
-            self.last_click_time = current_time;
             self.last_click_x = mouse_x;
             self.last_click_y = mouse_y;
         }
@@ -1021,18 +984,26 @@ impl WindowManager {
     fn clear_desktop_fast(&mut self, fb: *mut LimineFramebuffer) {
         unsafe {
             let fb_ptr = (*fb).address;
-            let _width = (*fb).width as usize;
+            let width = (*fb).width as usize;
             let height = (*fb).height as usize;
             let pitch = (*fb).pitch as usize / 4;
             let color = self.desktop_color;
             
-            // Fill entire framebuffer row by row using write_volatile
-            // This is faster than pixel-by-pixel and prevents optimization
-            for y in 0..height {
-                let row_ptr = fb_ptr.add(y * pitch);
-                for x in 0.._width {
-                    core::ptr::write_volatile(row_ptr.add(x), color);
-                }
+            // Safety check: ensure valid dimensions
+            if width == 0 || height == 0 {
+                return;
+            }
+            
+            // Fill first row with color
+            for x in 0..width {
+                core::ptr::write_volatile(fb_ptr.add(x), color);
+            }
+            
+            // Copy first row to all other rows (much faster than filling each row individually)
+            for y in 1..height {
+                let src = fb_ptr;
+                let dst = fb_ptr.add(y * pitch);
+                core::ptr::copy_nonoverlapping(src, dst, width);
             }
         }
     }
