@@ -15,6 +15,8 @@ typedef struct {
     float angle_z;
     uint32_t frame_count;
     bool animating;
+    uint32_t animation_duration_frames;  // Total frames to animate
+    bool animation_complete;              // True when animation has finished
 } gpu_3d_state_t;
 
 // Simple delay function for animation
@@ -202,8 +204,8 @@ static void draw_3d_animation(window_t *win) {
     // Draw the 3D cube
     draw_3d_cube(win, state, center_x, center_y, cube_size, scale);
     
-    // Update rotation angles for animation
-    if (state->animating) {
+    // Update rotation angles for animation (only if not complete)
+    if (state->animating && !state->animation_complete) {
         state->angle_x += 0.05f;
         state->angle_y += 0.03f;
         state->angle_z += 0.02f;
@@ -214,12 +216,19 @@ static void draw_3d_animation(window_t *win) {
         if (state->angle_z > 6.28f) state->angle_z -= 6.28f;
         
         state->frame_count++;
+        
+        // Check if animation duration has been reached (approximately 3-4 seconds)
+        // Assuming ~15-20 frames per second with our delay
+        if (state->frame_count >= state->animation_duration_frames) {
+            state->animation_complete = true;
+            state->animating = false;
+        }
     }
     
     // Draw info text
     wm_draw_text_to_window(win, "3D Cube Animation", 10, 25, 0xffffff);
     
-    // Draw frame counter
+    // Draw frame counter and status
     char frame_str[32] = "Frame: ";
     int frame_num = state->frame_count;
     int pos = 7;
@@ -237,7 +246,16 @@ static void draw_3d_animation(window_t *win) {
         }
     }
     frame_str[pos] = '\0';
-    wm_draw_text_to_window(win, frame_str, 10, win->height - 30, 0x00ff00);
+    
+    uint32_t status_color = state->animation_complete ? 0x00ff00 : 0xffff00;
+    wm_draw_text_to_window(win, frame_str, 10, win->height - 50, status_color);
+    
+    // Draw animation status
+    if (state->animation_complete) {
+        wm_draw_text_to_window(win, "Animation: COMPLETE", 10, win->height - 30, 0x00ff00);
+    } else {
+        wm_draw_text_to_window(win, "Animation: RUNNING", 10, win->height - 30, 0xffff00);
+    }
 }
 
 // GPU test command - demonstrates GPU rendering capabilities
@@ -381,7 +399,9 @@ void cmd_gpu_test(const char *args) {
             .angle_y = 0.0f,
             .angle_z = 0.0f,
             .frame_count = 0,
-            .animating = true
+            .animating = true,
+            .animation_duration_frames = 60,  // Animate for ~3-4 seconds (60 frames)
+            .animation_complete = false
         };
         
         // Set draw callback and user data
@@ -392,14 +412,18 @@ void cmd_gpu_test(const char *args) {
         wm_invalidate_window(anim_window);
         wm_update();
         
-        terminal_print("Running 3D animation (60 frames)...\n");
+        terminal_print("Running 3D animation (3-4 seconds)...\n");
         
-        // Animate for 60 frames
-        for (int frame = 0; frame < 60; frame++) {
-            wm_invalidate_window(anim_window);
+        // Animate for specified duration
+        uint32_t max_frames = anim_state.animation_duration_frames;
+        for (uint32_t frame = 0; frame < max_frames; frame++) {
+            // Only invalidate if animation is still running
+            if (!anim_state.animation_complete) {
+                wm_invalidate_window(anim_window);
+            }
             wm_update();
             
-            // Small delay for animation speed
+            // Small delay for animation speed (~15-20 FPS)
             delay_animation(500000);
             
             // Check if window still exists
@@ -407,9 +431,22 @@ void cmd_gpu_test(const char *args) {
             if (wm_get_window_count() == 0) {
                 break; // Window was closed
             }
+            
+            // Break early if animation completed
+            if (anim_state.animation_complete) {
+                break;
+            }
         }
         
-        terminal_print("3D animation complete!\n");
+        // Final render to show completed state
+        if (!anim_state.animation_complete) {
+            anim_state.animation_complete = true;
+            anim_state.animating = false;
+        }
+        wm_invalidate_window(anim_window);
+        wm_update();
+        
+        terminal_print("3D animation complete! Window remains open.\n");
     }
     
     terminal_print("\nGPU test windows created!\n");
