@@ -196,6 +196,7 @@ impl WindowManager {
             let fb = self.get_framebuffer();
             if !fb.is_null() {
                 // Erase window area from framebuffer
+                // Use the exact window bounds to ensure complete erasure
                 self.erase_window_area(fb, (*window).x, (*window).y, (*window).width, (*window).height);
             }
         }
@@ -218,6 +219,21 @@ impl WindowManager {
                     }
                     if self.dragging_window == Some(window) {
                         self.dragging_window = None;
+                    }
+                    
+                    // Invalidate all remaining windows to force a full re-render
+                    // This ensures windows that were behind the destroyed window are properly redrawn
+                    for j in 0..self.window_count {
+                        if let Some(remaining_window) = self.windows[j] {
+                            unsafe {
+                                (*remaining_window).invalidated = true;
+                            }
+                        }
+                    }
+                    
+                    // Force immediate render to clear any artifacts
+                    if self.window_count > 0 {
+                        self.render();
                     }
                     break;
                 }
@@ -476,18 +492,27 @@ impl WindowManager {
             let fb_w = (*fb).width as usize;
             let fb_h = (*fb).height as usize;
             
+            // Calculate bounds with proper clamping
             let start_x = if x < 0 { 0 } else { x as usize };
             let start_y = if y < 0 { 0 } else { y as usize };
-            let end_x = if (x + width as i32) as usize > fb_w { fb_w } else { (x + width as i32) as usize };
-            let end_y = if (y + height as i32) as usize > fb_h { fb_h } else { (y + height as i32) as usize };
+            let end_x = {
+                let calculated = (x as i64 + width as i64) as usize;
+                if calculated > fb_w { fb_w } else { calculated }
+            };
+            let end_y = {
+                let calculated = (y as i64 + height as i64) as usize;
+                if calculated > fb_h { fb_h } else { calculated }
+            };
             
-            for fy in start_y..end_y {
-                for fx in start_x..end_x {
-                    *fb_ptr.add(fy * pitch + fx) = self.desktop_color;
+            // Ensure we have valid bounds
+            if start_x < end_x && start_y < end_y {
+                for fy in start_y..end_y {
+                    for fx in start_x..end_x {
+                        *fb_ptr.add(fy * pitch + fx) = self.desktop_color;
+                    }
                 }
             }
         }
-
     }
     
 
