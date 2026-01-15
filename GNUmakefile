@@ -23,13 +23,20 @@ all: $(IMAGE_NAME).iso
 .PHONY: all-hdd
 all-hdd: $(IMAGE_NAME).hdd
 
+# Create log directory for QEMU mount (if 9p filesystem support is added to kernel)
+.PHONY: log-dir
+log-dir:
+	mkdir -p qemu_logs/var/log
+
 .PHONY: run
-run: $(IMAGE_NAME).iso
+run: $(IMAGE_NAME).iso log-dir
+	@echo "Logs will be written to qemu_logs/system.log via serial port"
 	qemu-system-x86_64 \
 		-M q35 \
 		-cdrom $(IMAGE_NAME).iso \
 		-boot d \
 		-device virtio-gpu-pci \
+		-serial file:qemu_logs/system.log \
 		$(QEMUFLAGS)
 
 .PHONY: run-silent
@@ -118,7 +125,7 @@ $(IMAGE_NAME).hdd: limine/limine kernel
 .PHONY: clean
 clean:
 	$(MAKE) -C kernel clean
-	rm -rf iso_root $(IMAGE_NAME).iso $(IMAGE_NAME).hdd
+	rm -rf iso_root $(IMAGE_NAME).iso $(IMAGE_NAME).hdd qemu_logs
 
 .PHONY: distclean
 distclean: clean
