@@ -41,5 +41,6 @@ void wm_handle_mouse(int mouse_x, int mouse_y, bool left_button);
 void wm_update(void);
 int wm_get_window_count(void);
 void wm_get_window_info(int index, int *x, int *y, int *w, int *h, char *title);
+bool wm_load_wallpaper(const char *filename);
 
 #endif // WINDOW_MANAGER_RUST_H

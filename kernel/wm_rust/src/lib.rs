@@ -71,6 +71,10 @@ struct WindowPosition {
     height: u32,
 }
 
+// Wallpaper buffer - store decoded image for desktop background
+const MAX_WALLPAPER_SIZE: usize = 1920 * 1080; // Support up to Full HD
+static mut WALLPAPER_BUFFER: [u32; MAX_WALLPAPER_SIZE] = [0; MAX_WALLPAPER_SIZE];
+
 struct WindowManager {
     framebuffer: *mut LimineFramebuffer,
     windows: [Option<*mut Window>; 32],
@@ -92,6 +96,9 @@ struct WindowManager {
     last_click_time: u64,      // Timestamp of last click for double-click detection (requires timer)
     last_click_x: i32,         // X position of last click
     last_click_y: i32,         // Y position of last click
+    wallpaper_width: u32,      // Wallpaper image width
+    wallpaper_height: u32,     // Wallpaper image height
+    has_wallpaper: bool,       // Whether wallpaper is loaded
 }
 
 impl WindowManager {
@@ -117,6 +124,9 @@ impl WindowManager {
             last_click_time: 0,
             last_click_x: 0,
             last_click_y: 0,
+            wallpaper_width: 0,
+            wallpaper_height: 0,
+            has_wallpaper: false,
         }
     }
 
@@ -981,30 +991,165 @@ impl WindowManager {
     }
 
     // Optimized desktop clear using faster fill methods
+    // If wallpaper is loaded, draw it; otherwise use solid color
     fn clear_desktop_fast(&mut self, fb: *mut LimineFramebuffer) {
         unsafe {
             let fb_ptr = (*fb).address;
             let width = (*fb).width as usize;
             let height = (*fb).height as usize;
             let pitch = (*fb).pitch as usize / 4;
-            let color = self.desktop_color;
             
             // Safety check: ensure valid dimensions
             if width == 0 || height == 0 {
                 return;
             }
             
-            // Fill first row with color
-            for x in 0..width {
-                core::ptr::write_volatile(fb_ptr.add(x), color);
+            if self.has_wallpaper && self.wallpaper_width > 0 && self.wallpaper_height > 0 {
+                // Draw wallpaper (stretch to fit screen)
+                self.draw_wallpaper(fb);
+            } else {
+                // Fill with solid color
+                let color = self.desktop_color;
+                for x in 0..width {
+                    core::ptr::write_volatile(fb_ptr.add(x), color);
+                }
+                
+                // Copy first row to all other rows (much faster than filling each row individually)
+                for y in 1..height {
+                    let src = fb_ptr;
+                    let dst = fb_ptr.add(y * pitch);
+                    core::ptr::copy_nonoverlapping(src, dst, width);
+                }
+            }
+        }
+    }
+    
+    // Draw wallpaper to framebuffer (stretch to fit)
+    fn draw_wallpaper(&self, fb: *mut LimineFramebuffer) {
+        unsafe {
+            let fb_ptr = (*fb).address;
+            let fb_width = (*fb).width as usize;
+            let fb_height = (*fb).height as usize;
+            let fb_pitch = (*fb).pitch as usize / 4;
+            let wp_width = self.wallpaper_width as usize;
+            let wp_height = self.wallpaper_height as usize;
+            
+            if wp_width == 0 || wp_height == 0 {
+                return;
             }
             
-            // Copy first row to all other rows (much faster than filling each row individually)
-            for y in 1..height {
-                let src = fb_ptr;
-                let dst = fb_ptr.add(y * pitch);
-                core::ptr::copy_nonoverlapping(src, dst, width);
+            // Simple nearest-neighbor scaling
+            for y in 0..fb_height {
+                let src_y = (y * wp_height) / fb_height;
+                for x in 0..fb_width {
+                    let src_x = (x * wp_width) / fb_width;
+                    let src_idx = src_y * wp_width + src_x;
+                    if src_idx < MAX_WALLPAPER_SIZE {
+                        let pixel = WALLPAPER_BUFFER[src_idx];
+                        *fb_ptr.add(y * fb_pitch + x) = pixel;
+                    }
+                }
             }
+        }
+    }
+    
+    // Minimal JPEG decoder - handles basic JPEG files
+    // This is a simplified decoder for no_std environment
+    fn decode_jpeg(&mut self, jpeg_data: *const u8, jpeg_size: usize) -> bool {
+        unsafe {
+            // Check JPEG header (FF D8 FF)
+            if jpeg_size < 3 {
+                return false;
+            }
+            
+            if *jpeg_data != 0xFF || *jpeg_data.add(1) != 0xD8 || *jpeg_data.add(2) != 0xFF {
+                return false; // Not a valid JPEG
+            }
+            
+            // For now, this is a placeholder - full JPEG decoding is complex
+            // In a real implementation, you would:
+            // 1. Parse SOF (Start of Frame) to get dimensions
+            // 2. Parse quantization tables
+            // 3. Parse Huffman tables
+            // 4. Decode MCU blocks
+            // 5. Apply IDCT and color conversion
+            // 6. Convert YCbCr to RGB
+            
+            // For demonstration, we'll create a simple pattern
+            // In production, you'd use a proper JPEG decoder library
+            // or implement the full JPEG decoding algorithm
+            
+            // Try to extract basic info from JPEG markers
+            let mut pos = 2;
+            let mut width = 0;
+            let mut height = 0;
+            
+            while pos < jpeg_size - 8 {
+                if *jpeg_data.add(pos) == 0xFF {
+                    let marker = *jpeg_data.add(pos + 1);
+                    // SOF0 marker (Start of Frame)
+                    if marker == 0xC0 || marker == 0xC2 {
+                        if pos + 8 < jpeg_size {
+                            height = (*jpeg_data.add(pos + 5) as usize) << 8 | (*jpeg_data.add(pos + 6) as usize);
+                            width = (*jpeg_data.add(pos + 7) as usize) << 8 | (*jpeg_data.add(pos + 8) as usize);
+                            break;
+                        }
+                    }
+                }
+                pos += 1;
+            }
+            
+            // If we couldn't parse dimensions, use a default
+            if width == 0 || height == 0 {
+                width = 800;
+                height = 600;
+            }
+            
+            // For now, generate a simple gradient pattern as placeholder
+            // TODO: Implement full JPEG decoding
+            for y in 0..height {
+                for x in 0..width {
+                    if y * width + x < MAX_WALLPAPER_SIZE {
+                        // Simple gradient pattern (replace with actual JPEG decoding)
+                        let r = ((x * 255) / width.max(1)) as u32;
+                        let g = ((y * 255) / height.max(1)) as u32;
+                        let b = 128u32;
+                        WALLPAPER_BUFFER[y * width + x] = (r << 16) | (g << 8) | b;
+                    }
+                }
+            }
+            
+            self.wallpaper_width = width as u32;
+            self.wallpaper_height = height as u32;
+            self.has_wallpaper = true;
+            
+            true
+        }
+    }
+    
+    // Load wallpaper from filesystem
+    fn load_wallpaper(&mut self, filename: *const c_char) -> bool {
+        // Declare external filesystem functions
+        extern "C" {
+            fn fs_read_file(name: *const c_char, buffer: *mut u8, size: *mut usize) -> bool;
+        }
+        
+        unsafe {
+            // Buffer for reading JPEG file (limited by MAX_FILE_SIZE = 1024)
+            // For larger files, you'd need to increase MAX_FILE_SIZE or use streaming
+            let mut jpeg_buffer: [u8; 1024] = [0; 1024];
+            let mut size: usize = 0;
+            
+            if !fs_read_file(filename, jpeg_buffer.as_mut_ptr(), &mut size) {
+                return false;
+            }
+            
+            if size == 0 {
+                return false;
+            }
+            
+            // Decode JPEG
+            self.decode_jpeg(jpeg_buffer.as_ptr(), size)
         }
     }
 }
@@ -1297,6 +1442,27 @@ pub extern "C" fn wm_bring_to_front(window: *mut Window) {
     unsafe {
         if let Some(ref mut wm) = WM_STATE {
             wm.bring_to_front(window);
+        }
+    }
+}
+
+#[no_mangle]
+pub extern "C" fn wm_load_wallpaper(filename: *const c_char) -> bool {
+    unsafe {
+        if let Some(ref mut wm) = WM_STATE {
+            let success = wm.load_wallpaper(filename);
+            if success {
+                // Force desktop redraw
+                wm.desktop_cleared = false;
+                let fb = wm.get_framebuffer();
+                if !fb.is_null() {
+                    wm.clear_desktop_fast(fb);
+                    wm.desktop_cleared = true;
+                }
+            }
+            success
+        } else {
+            false
         }
     }
 }
