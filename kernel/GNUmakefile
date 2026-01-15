@@ -119,8 +119,10 @@ CARGO := cargo
 # Check if Rust is available
 RUST_AVAILABLE := $(shell command -v $(RUSTC) >/dev/null 2>&1 && echo yes || echo no)
 
-# Rust library path
-RUST_LIB := wm_rust/target/x86_64-unknown-none/release/libwm_rust.a
+# Rust library paths
+RUST_WM_LIB := wm_rust/target/x86_64-unknown-none/release/libwm_rust.a
+RUST_FS_LIB := fs_rust/target/x86_64-unknown-none/release/libfs_rust.a
+RUST_LIB := $(RUST_WM_LIB) $(RUST_FS_LIB)
 
 # Use "find" to glob all *.c, *.S, and *.asm files in the tree and obtain the
 # object and header dependency file names.
@@ -142,13 +144,17 @@ endif
 .PHONY: all
 all: bin/$(OUTPUT)
 
-# Build Rust library
+# Build Rust libraries
 .PHONY: rust-lib
-rust-lib: $(RUST_LIB)
+rust-lib: $(RUST_WM_LIB) $(RUST_FS_LIB)
 
-$(RUST_LIB): wm_rust/Cargo.toml wm_rust/src/lib.rs
+$(RUST_WM_LIB): wm_rust/Cargo.toml wm_rust/src/lib.rs
 	@echo "Building Rust window manager..."
 	cd wm_rust && $(CARGO) build --release --target x86_64-unknown-none
+
+$(RUST_FS_LIB): fs_rust/Cargo.toml fs_rust/src/lib.rs
+	@echo "Building Rust filesystem..."
+	cd fs_rust && $(CARGO) build --release --target x86_64-unknown-none
 
 # Include header dependencies.
 -include $(HEADER_DEPS)
@@ -179,6 +185,7 @@ clean:
 	rm -rf bin obj
 ifeq ($(RUST_AVAILABLE),yes)
 	cd wm_rust && $(CARGO) clean 2>/dev/null || true
+	cd fs_rust && $(CARGO) clean 2>/dev/null || true
 endif
 
 # Remove everything built and generated including downloaded dependencies.

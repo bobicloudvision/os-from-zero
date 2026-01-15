@@ -1,2 +1,3 @@
 /.idea
 /kernel/wm_rust/target
+/kernel/fs_rust/target
