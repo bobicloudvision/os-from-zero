@@ -452,19 +452,27 @@ impl WindowManager {
             
             // If framebuffer is larger than buffer limit, scale down proportionally using integer math
             if (new_width * new_height) as usize > MAX_BUFFER_SIZE {
-                // Calculate aspect ratio using integer math (multiply by 1000 for precision)
-                let aspect_num = fb_width as u64 * 1000;
+                // Calculate aspect ratio (width/height) - use direct ratio without multiplying
+                let aspect_num = fb_width as u64;
                 let aspect_den = fb_height as u64;
                 
                 // Try to fit within buffer size while maintaining aspect
                 if fb_width > fb_height {
                     // Landscape - limit by width first
                     new_width = MAX_WIDTH;
-                    new_height = ((MAX_WIDTH as u64 * aspect_den) / aspect_num) as u32;
+                    // Calculate height: (width * original_height) / original_width
+                    new_height = ((MAX_WIDTH as u64 * aspect_den + aspect_num / 2) / aspect_num) as u32; // +aspect_num/2 for rounding
+                    if new_height == 0 {
+                        new_height = 1; // Ensure at least 1 pixel
+                    }
                     if (new_width * new_height) as usize > MAX_BUFFER_SIZE {
                         // Still too large, limit by height
                         new_height = MAX_HEIGHT;
-                        new_width = ((MAX_HEIGHT as u64 * aspect_num) / aspect_den) as u32;
+                        // Calculate width: (height * original_width) / original_height
+                        new_width = ((MAX_HEIGHT as u64 * aspect_num + aspect_den / 2) / aspect_den) as u32; // +aspect_den/2 for rounding
+                        if new_width == 0 {
+                            new_width = 1; // Ensure at least 1 pixel
+                        }
                         // Final safety check
                         if (new_width * new_height) as usize > MAX_BUFFER_SIZE {
                             // Fallback to a safe size
@@ -475,11 +483,19 @@ impl WindowManager {
                 } else {
                     // Portrait or square - limit by height first
                     new_height = MAX_HEIGHT;
-                    new_width = ((MAX_HEIGHT as u64 * aspect_num) / aspect_den) as u32;
+                    // Calculate width: (height * original_width) / original_height
+                    new_width = ((MAX_HEIGHT as u64 * aspect_num + aspect_den / 2) / aspect_den) as u32; // +aspect_den/2 for rounding
+                    if new_width == 0 {
+                        new_width = 1; // Ensure at least 1 pixel
+                    }
                     if (new_width * new_height) as usize > MAX_BUFFER_SIZE {
                         // Still too large, limit by width
                         new_width = MAX_WIDTH;
-                        new_height = ((MAX_WIDTH as u64 * aspect_den) / aspect_num) as u32;
+                        // Calculate height: (width * original_height) / original_width
+                        new_height = ((MAX_WIDTH as u64 * aspect_den + aspect_num / 2) / aspect_num) as u32; // +aspect_num/2 for rounding
+                        if new_height == 0 {
+                            new_height = 1; // Ensure at least 1 pixel
+                        }
                         // Final safety check
                         if (new_width * new_height) as usize > MAX_BUFFER_SIZE {
                             // Fallback to a safe size
@@ -498,8 +514,9 @@ impl WindowManager {
             }
             
             logger_rust_log_fmt(0, b"WM\0".as_ptr() as *const c_char,
-                b"new_size=%ux%u, buffer_size=%u\0".as_ptr() as *const c_char,
-                new_width, new_height, (new_width * new_height) as u32);
+                b"new_size=%ux%u, buffer_size=%u, fb=%lux%lu\0".as_ptr() as *const c_char,
+                new_width, new_height, (new_width * new_height) as u32, 
+                fb_width as u64, fb_height as u64);
             
             // Mark old position as dirty
             ds_mark_dirty((*window).x, (*window).y, (*window).width, (*window).height);

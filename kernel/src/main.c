@@ -14,6 +14,7 @@
 #include "window_manager_rust.h"
 #include "pci.h"
 #include "gpu_rust.h"
+#include "commands/window_example.h"
 
 // Global framebuffer pointer for graphics3d system
 struct limine_framebuffer *g_framebuffer = NULL;
@@ -297,6 +298,22 @@ void kmain(void) {
     
     // Filesystem and process system already initialized above
 
-    // Start the shell
-    shell_loop();
+    // Create windows directly instead of starting shell
+    run_window_examples();
+    
+    // Simple loop to handle mouse events and window manager updates
+    while (1) {
+        // Check for mouse events
+        if (mouse_has_data()) {
+            mouse_handle_interrupt();
+        }
+        
+        // Handle window manager mouse and update
+        extern void wm_handle_mouse(int mouse_x, int mouse_y, bool left_button);
+        extern void wm_update(void);
+        
+        mouse_state_t *mouse = mouse_get_state();
+        wm_handle_mouse(mouse->x, mouse->y, mouse->left_button);
+        wm_update();
+    }
 }
