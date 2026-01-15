@@ -35,6 +35,8 @@ static void check_mouse_events(void) {
     extern int wm_get_window_count(void);
     
     mouse_state_t *mouse = mouse_get_state();
+    
+    // Always handle mouse (for click detection even without windows)
     wm_handle_mouse(mouse->x, mouse->y, mouse->left_button);
     
     // Update window manager (only if windows exist)

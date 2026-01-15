@@ -3,6 +3,7 @@
 #include "../string.h"
 #include "../shell.h"
 #include "../terminal.h"
+#include "../mouse.h"
 #include <stddef.h>
 
 // Example: Create a simple window with text
@@ -116,12 +117,17 @@ void create_info_window_example(void) {
 
 // Main example function - creates all examples
 void run_window_examples(void) {
+    // Create windows with some spacing
     create_simple_window_example();
     create_colored_rectangles_example();
     create_pattern_example();
     create_info_window_example();
     // Uncomment to create multiple windows:
     // create_multiple_windows_example();
+    
+    // Force immediate render
+    extern void wm_update(void);
+    wm_update();
 }
 
 // Command handler for 'windows' command
@@ -131,7 +137,8 @@ static void cmd_windows(const char *args) {
         terminal_print("Creating window examples...\n");
         run_window_examples();
         terminal_print("Windows created! Try moving them with your mouse.\n");
-        terminal_print("Click and drag the title bar to move windows.\n");
+        terminal_print("Click and drag the title bar (top 20px) to move windows.\n");
+        terminal_print("Click the red X button to close windows.\n");
         // Force an update to render the windows
         extern void wm_update(void);
         wm_update();
@@ -164,10 +171,75 @@ static void cmd_windows(const char *args) {
     }
 }
 
+// Debug command to show mouse and window info
+static void cmd_wmdebug(const char *args) {
+    (void)args;
+    extern void wm_get_debug_info(char *buffer, size_t buffer_size);
+    extern int wm_get_window_count(void);
+    extern void wm_get_window_info(int index, int *x, int *y, int *w, int *h, char *title);
+    
+    terminal_print("Window Manager Debug Info:\n");
+    
+    int window_count = wm_get_window_count();
+    char count_str[32];
+    int_to_string(window_count, count_str);
+    terminal_print("Window count: ");
+    terminal_print(count_str);
+    terminal_print("\n");
+    
+    // Get mouse position
+    extern mouse_state_t* mouse_get_state(void);
+    mouse_state_t *mouse = mouse_get_state();
+    char mouse_x_str[32], mouse_y_str[32];
+    int_to_string(mouse->x, mouse_x_str);
+    int_to_string(mouse->y, mouse_y_str);
+    terminal_print("Mouse position: (");
+    terminal_print(mouse_x_str);
+    terminal_print(", ");
+    terminal_print(mouse_y_str);
+    terminal_print(")\n");
+    terminal_print("Mouse button: ");
+    terminal_print(mouse->left_button ? "PRESSED" : "RELEASED");
+    terminal_print("\n");
+    
+    // Show window positions
+    for (int i = 0; i < window_count && i < 10; i++) {
+        int x, y, w, h;
+        char title[64];
+        wm_get_window_info(i, &x, &y, &w, &h, title);
+        
+        char x_str[32], y_str[32], w_str[32], h_str[32];
+        int_to_string(x, x_str);
+        int_to_string(y, y_str);
+        int_to_string(w, w_str);
+        int_to_string(h, h_str);
+        
+        terminal_print("Window ");
+        char idx_str[16];
+        int_to_string(i, idx_str);
+        terminal_print(idx_str);
+        terminal_print(": ");
+        terminal_print(title);
+        terminal_print(" at (");
+        terminal_print(x_str);
+        terminal_print(", ");
+        terminal_print(y_str);
+        terminal_print(") size ");
+        terminal_print(w_str);
+        terminal_print("x");
+        terminal_print(h_str);
+        terminal_print("\n");
+    }
+}
+
 // Register window example commands
 void register_window_example_commands(void) {
     register_command("windows", cmd_windows, 
                      "Create example windows to demonstrate the window manager",
                      "windows [simple|colors|pattern|info|multiple]",
+                     "Desktop");
+    register_command("wmdebug", cmd_wmdebug,
+                     "Show window manager debug information",
+                     "wmdebug",
                      "Desktop");
 }

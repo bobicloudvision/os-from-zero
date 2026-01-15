@@ -66,6 +66,7 @@ struct WindowManager {
     drag_offset_x: i32,
     drag_offset_y: i32,
     desktop_color: u32,
+    last_mouse_button: bool,  // Track previous button state for click detection
 }
 
 impl WindowManager {
@@ -79,6 +80,7 @@ impl WindowManager {
             drag_offset_x: 0,
             drag_offset_y: 0,
             desktop_color: 0x0d1117, // Match terminal background (dark gray)
+            last_mouse_button: false,
         }
     }
 
@@ -288,7 +290,7 @@ impl WindowManager {
     }
 
     fn handle_mouse(&mut self, mouse_x: i32, mouse_y: i32, left_button: bool) {
-        // Check if we're dragging
+        // Check if we're dragging - continue dragging while button is held
         if let Some(dragging) = self.dragging_window {
             if left_button {
                 unsafe {
@@ -319,13 +321,18 @@ impl WindowManager {
                     }
                 }
             } else {
+                // Button released - stop dragging
                 self.dragging_window = None;
             }
+            self.last_mouse_button = left_button;
             return;
         }
 
-        // Check for window focus and drag start
-        if left_button {
+        // Check for window focus and drag start only on button press (transition from not pressed to pressed)
+        let button_pressed = left_button && !self.last_mouse_button;
+        self.last_mouse_button = left_button;
+        
+        if button_pressed {
             // Check windows in reverse order (top to bottom)
             for i in (0..self.window_count).rev() {
                 if let Some(window) = self.windows[i] {
@@ -336,23 +343,30 @@ impl WindowManager {
                         let wh = (*window).height as i32;
                         
                         // Check if click is within window bounds
+                        // Note: mouse coordinates are in screen space, window coordinates are in screen space
                         if mouse_x >= wx && mouse_x < wx + ww &&
                            mouse_y >= wy && mouse_y < wy + wh {
                             
-                            // Check if click is on close button
+                            // Check if click is on close button (relative to window)
                             if ((*window).flags & WINDOW_CLOSABLE) != 0 {
-                                let close_x = wx + (*window).width as i32 - 18;
-                                let close_y = wy + 2;
-                                if mouse_x >= close_x && mouse_x < close_x + 16 &&
-                                   mouse_y >= close_y && mouse_y < close_y + 16 {
+                                let close_x_start = wx + (*window).width as i32 - 18;
+                                let close_x_end = close_x_start + 16;
+                                let close_y_start = wy + 2;
+                                let close_y_end = close_y_start + 16;
+                                
+                                if mouse_x >= close_x_start && mouse_x < close_x_end &&
+                                   mouse_y >= close_y_start && mouse_y < close_y_end {
                                     // Close button clicked
                                     self.destroy_window(window);
                                     return;
                                 }
                             }
                             
-                            // Check if click is in title bar (top 20 pixels)
-                            if mouse_y >= wy && mouse_y < wy + 20 {
+                            // Check if click is in title bar (top 20 pixels, relative to window)
+                            let title_bar_y_start = wy;
+                            let title_bar_y_end = wy + 20;
+                            
+                            if mouse_y >= title_bar_y_start && mouse_y < title_bar_y_end {
                                 // Focus this window
                                 if let Some(old_focused) = self.focused_window {
                                     if old_focused != window {
@@ -367,11 +381,12 @@ impl WindowManager {
                                 // Start dragging if window is movable
                                 if ((*window).flags & WINDOW_MOVABLE) != 0 {
                                     self.dragging_window = Some(window);
+                                    // Calculate offset from window origin
                                     self.drag_offset_x = mouse_x - wx;
                                     self.drag_offset_y = mouse_y - wy;
                                 }
                             }
-                            break; // Stop checking other windows
+                            break; // Stop checking other windows (topmost window gets the click)
                         }
                     }
                 }
@@ -730,6 +745,33 @@ pub extern "C" fn wm_get_window_count() -> c_int {
             wm.window_count as c_int
         } else {
             0
+        }
+    }
+}
+
+#[no_mangle]
+pub extern "C" fn wm_get_window_info(index: c_int, x: *mut c_int, y: *mut c_int, 
+                                     w: *mut c_int, h: *mut c_int, title: *mut c_char) {
+    unsafe {
+        if let Some(ref wm) = WM_STATE {
+            if index >= 0 && (index as usize) < wm.window_count {
+                if let Some(window) = wm.windows[index as usize] {
+                    *x = (*window).x;
+                    *y = (*window).y;
+                    *w = (*window).width as c_int;
+                    *h = (*window).height as c_int;
+                    
+                    // Copy title
+                    let title_bytes = (*window).title.as_ptr();
+                    let title_dest = title as *mut u8;
+                    let mut i = 0;
+                    while i < 63 && *title_bytes.add(i) != 0 {
+                        *title_dest.add(i) = *title_bytes.add(i);
+                        i += 1;
+                    }
+                    *title_dest.add(i) = 0;
+                }
+            }
         }
     }
 }
