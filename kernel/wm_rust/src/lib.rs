@@ -85,6 +85,10 @@ struct WindowManager {
     previous_positions: [Option<WindowPosition>; 32], // Track previous window positions
     mouse_x: i32,              // Current mouse X position for cursor rendering
     mouse_y: i32,              // Current mouse Y position for cursor rendering
+    last_cursor_x: i32,        // Previous cursor X position (for clearing)
+    last_cursor_y: i32,        // Previous cursor Y position (for clearing)
+    cursor_backup: [u32; (12 + 2) * (16 + 2)], // Backup pixels under cursor (including outline)
+    cursor_backup_valid: bool, // Whether cursor backup is valid
 }
 
 impl WindowManager {
@@ -103,6 +107,10 @@ impl WindowManager {
             previous_positions: [const { None }; 32],
             mouse_x: 0,
             mouse_y: 0,
+            last_cursor_x: -1,
+            last_cursor_y: -1,
+            cursor_backup: [0; (12 + 2) * (16 + 2)],
+            cursor_backup_valid: false,
         }
     }
 
@@ -509,6 +517,88 @@ impl WindowManager {
         }
     }
     
+    fn clear_cursor(&mut self, fb: *mut LimineFramebuffer, x: i32, y: i32) {
+        unsafe {
+            const CURSOR_WIDTH: usize = 12;
+            const CURSOR_HEIGHT: usize = 16;
+            const BACKUP_WIDTH: usize = CURSOR_WIDTH + 2;  // Include outline
+            const BACKUP_HEIGHT: usize = CURSOR_HEIGHT + 2; // Include outline
+            
+            if !self.cursor_backup_valid {
+                // If no backup available, just clear to desktop color (fallback)
+                let fb_ptr = (*fb).address;
+                let pitch = (*fb).pitch as usize / 4;
+                let fb_w = (*fb).width as usize;
+                let fb_h = (*fb).height as usize;
+                
+                for row in -1..=(CURSOR_HEIGHT as i32) {
+                    for col in -1..=(CURSOR_WIDTH as i32) {
+                        let px = x + col;
+                        let py = y + row;
+                        
+                        if px >= 0 && py >= 0 && 
+                           px < fb_w as i32 && py < fb_h as i32 {
+                            *fb_ptr.add((py as usize) * pitch + (px as usize)) = self.desktop_color;
+                        }
+                    }
+                }
+                return;
+            }
+            
+            // Restore saved background pixels
+            let fb_ptr = (*fb).address;
+            let pitch = (*fb).pitch as usize / 4;
+            let fb_w = (*fb).width as usize;
+            let fb_h = (*fb).height as usize;
+            
+            for row in 0..BACKUP_HEIGHT {
+                for col in 0..BACKUP_WIDTH {
+                    let px = x + col as i32 - 1; // -1 for outline
+                    let py = y + row as i32 - 1; // -1 for outline
+                    
+                    if px >= 0 && py >= 0 && 
+                       px < fb_w as i32 && py < fb_h as i32 {
+                        *fb_ptr.add((py as usize) * pitch + (px as usize)) = 
+                            self.cursor_backup[row * BACKUP_WIDTH + col];
+                    }
+                }
+            }
+            
+            self.cursor_backup_valid = false;
+        }
+    }
+    
+    fn save_cursor_background(&mut self, fb: *mut LimineFramebuffer, x: i32, y: i32) {
+        unsafe {
+            const CURSOR_WIDTH: usize = 12;
+            const CURSOR_HEIGHT: usize = 16;
+            const BACKUP_WIDTH: usize = CURSOR_WIDTH + 2;  // Include outline
+            const BACKUP_HEIGHT: usize = CURSOR_HEIGHT + 2; // Include outline
+            
+            let fb_ptr = (*fb).address;
+            let pitch = (*fb).pitch as usize / 4;
+            let fb_w = (*fb).width as usize;
+            let fb_h = (*fb).height as usize;
+            
+            for row in 0..BACKUP_HEIGHT {
+                for col in 0..BACKUP_WIDTH {
+                    let px = x + col as i32 - 1; // -1 for outline
+                    let py = y + row as i32 - 1; // -1 for outline
+                    
+                    if px >= 0 && py >= 0 && 
+                       px < fb_w as i32 && py < fb_h as i32 {
+                        self.cursor_backup[row * BACKUP_WIDTH + col] = 
+                            *fb_ptr.add((py as usize) * pitch + (px as usize));
+                    } else {
+                        // If outside screen bounds, save desktop color
+                        self.cursor_backup[row * BACKUP_WIDTH + col] = self.desktop_color;
+                    }
+                }
+            }
+            self.cursor_backup_valid = true;
+        }
+    }
+    
     fn render_cursor(&mut self, fb: *mut LimineFramebuffer) {
         unsafe {
             // Mouse cursor bitmap (12x16 pixels)
@@ -536,51 +626,69 @@ impl WindowManager {
             const CURSOR_COLOR: u32 = 0xFFFFFF; // White
             const CURSOR_OUTLINE_COLOR: u32 = 0x000000; // Black
             
-            let fb_ptr = (*fb).address;
-            let pitch = (*fb).pitch as usize / 4;
-            let fb_w = (*fb).width as usize;
-            let fb_h = (*fb).height as usize;
+            let x = self.mouse_x;
+            let y = self.mouse_y;
             
-            let x = self.mouse_x as usize;
-            let y = self.mouse_y as usize;
+            // Clear previous cursor position only if cursor actually moved
+            if self.last_cursor_x >= 0 && self.last_cursor_y >= 0 && 
+               (self.last_cursor_x != x || self.last_cursor_y != y) {
+                self.clear_cursor(fb, self.last_cursor_x, self.last_cursor_y);
+            }
             
-            // Draw cursor with black outline first, then white fill
-            for row in 0..CURSOR_HEIGHT {
-                let bitmap_row = CURSOR_BITMAP[row];
-                for col in 0..CURSOR_WIDTH {
-                    if (bitmap_row & (1 << (11 - col))) != 0 {
-                        // Draw black outline pixels around the white pixel
-                        for dy in -1..=1 {
-                            for dx in -1..=1 {
-                                if dx == 0 && dy == 0 {
-                                    continue; // Skip center pixel
-                                }
-                                let px = x as i32 + col as i32 + dx;
-                                let py = y as i32 + row as i32 + dy;
-                                
-                                if px >= 0 && py >= 0 && 
-                                   px < fb_w as i32 && py < fb_h as i32 {
-                                    *fb_ptr.add((py as usize) * pitch + (px as usize)) = CURSOR_OUTLINE_COLOR;
+            // Draw cursor at new position (only if position changed or first time)
+            if self.last_cursor_x != x || self.last_cursor_y != y || 
+               self.last_cursor_x == -1 || self.last_cursor_y == -1 {
+                // Save background pixels before drawing
+                self.save_cursor_background(fb, x, y);
+                
+                let fb_ptr = (*fb).address;
+                let pitch = (*fb).pitch as usize / 4;
+                let fb_w = (*fb).width as usize;
+                let fb_h = (*fb).height as usize;
+                
+                // Draw cursor with black outline first, then white fill
+                for row in 0..CURSOR_HEIGHT {
+                    let bitmap_row = CURSOR_BITMAP[row];
+                    for col in 0..CURSOR_WIDTH {
+                        if (bitmap_row & (1 << (11 - col))) != 0 {
+                            // Draw black outline pixels around the white pixel
+                            for dy in -1..=1 {
+                                for dx in -1..=1 {
+                                    if dx == 0 && dy == 0 {
+                                        continue; // Skip center pixel
+                                    }
+                                    let px = x + col as i32 + dx;
+                                    let py = y + row as i32 + dy;
+                                    
+                                    if px >= 0 && py >= 0 && 
+                                       px < fb_w as i32 && py < fb_h as i32 {
+                                        *fb_ptr.add((py as usize) * pitch + (px as usize)) = CURSOR_OUTLINE_COLOR;
+                                    }
                                 }
                             }
                         }
                     }
                 }
-            }
-            
-            // Draw white cursor pixels on top
-            for row in 0..CURSOR_HEIGHT {
-                let bitmap_row = CURSOR_BITMAP[row];
-                for col in 0..CURSOR_WIDTH {
-                    if (bitmap_row & (1 << (11 - col))) != 0 {
-                        let px = x + col;
-                        let py = y + row;
-                        
-                        if px < fb_w && py < fb_h {
-                            *fb_ptr.add(py * pitch + px) = CURSOR_COLOR;
+                
+                // Draw white cursor pixels on top
+                for row in 0..CURSOR_HEIGHT {
+                    let bitmap_row = CURSOR_BITMAP[row];
+                    for col in 0..CURSOR_WIDTH {
+                        if (bitmap_row & (1 << (11 - col))) != 0 {
+                            let px = x + col as i32;
+                            let py = y + row as i32;
+                            
+                            if px >= 0 && py >= 0 && 
+                               px < fb_w as i32 && py < fb_h as i32 {
+                                *fb_ptr.add((py as usize) * pitch + (px as usize)) = CURSOR_COLOR;
+                            }
                         }
                     }
                 }
+                
+                // Update last position
+                self.last_cursor_x = x;
+                self.last_cursor_y = y;
             }
         }
     }
