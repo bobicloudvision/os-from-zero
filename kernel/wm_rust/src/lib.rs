@@ -59,12 +59,21 @@ static mut WM_STATE: Option<WindowManager> = None;
 
 // Window pool for static allocation (shared between create and destroy)
 static mut WINDOW_POOL: [Option<Window>; 32] = [const { None }; 32];
-const MAX_BUFFER_SIZE: usize = 1920 * 1080; // HD support
+const MAX_BUFFER_SIZE: usize = 800 * 600; // VGA resolution - more reasonable size
 static mut BUFFER_POOL: [[u32; MAX_BUFFER_SIZE]; 32] = [[0; MAX_BUFFER_SIZE]; 32];
 
 // Track previous window positions for proper erasing
 #[derive(Copy, Clone)]
 struct WindowPosition {
+    x: i32,
+    y: i32,
+    width: u32,
+    height: u32,
+}
+
+// Dirty rectangle tracking for optimized rendering
+#[derive(Copy, Clone)]
+struct DirtyRect {
     x: i32,
     y: i32,
     width: u32,
@@ -89,6 +98,10 @@ struct WindowManager {
     last_cursor_y: i32,        // Previous cursor Y position (for clearing)
     cursor_backup: [u32; (12 + 2) * (16 + 2)], // Backup pixels under cursor (including outline)
     cursor_backup_valid: bool, // Whether cursor backup is valid
+    dirty_rects: [Option<DirtyRect>; 32], // Track dirty regions for optimized rendering
+    last_click_time: u64,      // Timestamp of last click for double-click detection
+    last_click_x: i32,         // X position of last click
+    last_click_y: i32,         // Y position of last click
 }
 
 impl WindowManager {
@@ -111,11 +124,118 @@ impl WindowManager {
             last_cursor_y: -1,
             cursor_backup: [0; (12 + 2) * (16 + 2)],
             cursor_backup_valid: false,
+            dirty_rects: [const { None }; 32],
+            last_click_time: 0,
+            last_click_x: 0,
+            last_click_y: 0,
         }
     }
 
     fn get_framebuffer(&self) -> *mut LimineFramebuffer {
         self.framebuffer
+    }
+
+    // Bounds checking helper
+    #[inline(always)]
+    fn is_point_in_bounds(&self, x: i32, y: i32, fb: *mut LimineFramebuffer) -> bool {
+        unsafe {
+            x >= 0 && y >= 0 && 
+            x < (*fb).width as i32 && 
+            y < (*fb).height as i32
+        }
+    }
+
+    // Mark a region as dirty for optimized rendering
+    fn mark_dirty(&mut self, x: i32, y: i32, width: u32, height: u32) {
+        // Find an empty slot or merge with existing dirty rects
+        for i in 0..32 {
+            if let Some(ref mut rect) = self.dirty_rects[i] {
+                // Try to merge if overlapping or adjacent
+                if x <= (rect.x + rect.width as i32) && (x + width as i32) >= rect.x &&
+                    y <= (rect.y + rect.height as i32) && (y + height as i32) >= rect.y {
+                    // Merge rectangles
+                    let min_x = core::cmp::min(rect.x, x);
+                    let min_y = core::cmp::min(rect.y, y);
+                    let max_x = core::cmp::max(rect.x + rect.width as i32, x + width as i32);
+                    let max_y = core::cmp::max(rect.y + rect.height as i32, y + height as i32);
+                    rect.x = min_x;
+                    rect.y = min_y;
+                    rect.width = (max_x - min_x) as u32;
+                    rect.height = (max_y - min_y) as u32;
+                    return;
+                }
+            } else {
+                // Empty slot, use it
+                self.dirty_rects[i] = Some(DirtyRect { x, y, width, height });
+                return;
+            }
+        }
+    }
+
+    // Bring window to front (top of Z-order)
+    fn bring_to_front(&mut self, window: *mut Window) {
+        // Find window index
+        let mut idx = None;
+        for i in 0..self.window_count {
+            if self.windows[i] == Some(window) {
+                idx = Some(i);
+                break;
+            }
+        }
+        
+        if let Some(i) = idx {
+            // Move window to end of array (top of Z-order)
+            let win = self.windows[i];
+            let prev_pos = self.previous_positions[i];
+            
+            for j in i..self.window_count - 1 {
+                self.windows[j] = self.windows[j + 1];
+                self.previous_positions[j] = self.previous_positions[j + 1];
+            }
+            
+            self.windows[self.window_count - 1] = win;
+            self.previous_positions[self.window_count - 1] = prev_pos;
+            
+            unsafe {
+                if let Some(w) = win {
+                    (*w).invalidated = true;
+                }
+            }
+        }
+    }
+
+    // Resize window support
+    fn resize_window(&mut self, window: *mut Window, new_width: u32, new_height: u32) {
+        unsafe {
+            // Validate new size
+            let buffer_size = (new_width * new_height) as usize;
+            if buffer_size > MAX_BUFFER_SIZE {
+                return; // Too large
+            }
+            
+            // Find window slot
+            let slot = (*window).id as usize;
+            if slot >= 32 {
+                return;
+            }
+            
+            // Clear old buffer area
+            let old_size = ((*window).width * (*window).height) as usize;
+            for i in 0..old_size {
+                *(*window).buffer.add(i) = 0;
+            }
+            
+            // Update dimensions
+            (*window).width = new_width;
+            (*window).height = new_height;
+            (*window).invalidated = true;
+            
+            // Clear new size
+            let new_size = buffer_size;
+            for i in 0..new_size {
+                *(*window).buffer.add(i) = 0;
+            }
+        }
     }
 
     fn create_window(&mut self, title: *const c_char, x: i32, y: i32, width: u32, height: u32, flags: u32) -> *mut Window {
@@ -374,6 +494,37 @@ impl WindowManager {
         
         // Track button state for press detection
         let button_just_pressed = left_button && !self.last_mouse_button;
+        
+        // Double-click detection
+        const DOUBLE_CLICK_TIME_MS: u64 = 500;
+        const DOUBLE_CLICK_DISTANCE: i32 = 5;
+        
+        if button_just_pressed {
+            // Get current timestamp (simplified - in real OS you'd use a timer)
+            // For now, we'll use a simple counter that increments
+            let current_time = self.last_click_time.wrapping_add(1);
+            
+            // Check for double-click
+            let time_diff = current_time.saturating_sub(self.last_click_time);
+            let dx = mouse_x - self.last_click_x;
+            let dy = mouse_y - self.last_click_y;
+            // Use squared distance comparison to avoid sqrt (not available in no_std)
+            let distance_sq = dx * dx + dy * dy;
+            let max_distance_sq = DOUBLE_CLICK_DISTANCE * DOUBLE_CLICK_DISTANCE;
+            
+            if time_diff < DOUBLE_CLICK_TIME_MS && distance_sq < max_distance_sq {
+                // Double-click detected - could trigger maximize or other action
+                // For now, just bring window to front
+                if let Some(window) = self.focused_window {
+                    self.bring_to_front(window);
+                }
+            }
+            
+            self.last_click_time = current_time;
+            self.last_click_x = mouse_x;
+            self.last_click_y = mouse_y;
+        }
+        
         self.last_mouse_button = left_button;
         
         // Check if we're dragging - continue dragging while button is held
@@ -451,7 +602,7 @@ impl WindowManager {
                             let title_bar_y_end = wy + 20;
                             
                             if mouse_y >= title_bar_y_start && mouse_y < title_bar_y_end {
-                                // Focus this window
+                                // Focus this window and bring to front
                                 if let Some(old_focused) = self.focused_window {
                                     if old_focused != window {
                                         (*old_focused).focused = false;
@@ -461,6 +612,7 @@ impl WindowManager {
                                 self.focused_window = Some(window);
                                 (*window).focused = true;
                                 (*window).invalidated = true;
+                                self.bring_to_front(window);
                                 
                                 // Start dragging if window is movable
                                 if ((*window).flags & WINDOW_MOVABLE) != 0 {
@@ -485,21 +637,12 @@ impl WindowManager {
                 return;
             }
             
-            let width = (*fb).width as usize;
-            let height = (*fb).height as usize;
-            let pitch = (*fb).pitch as usize / 4;
-            
             // Only render desktop and windows if we have windows
             if self.window_count > 0 {
                 // Optimized: Direct rendering - much faster than double buffering
                 // Clear desktop background only once when first window is created
                 if !self.desktop_cleared {
-                    let fb_ptr = (*fb).address;
-                    for y in 0..height {
-                        for x in 0..width {
-                            *fb_ptr.add(y * pitch + x) = self.desktop_color;
-                        }
-                    }
+                    self.clear_desktop_fast(fb);
                     self.desktop_cleared = true;
                 }
                 
@@ -820,61 +963,75 @@ impl WindowManager {
             
             let win_buffer = (*window).buffer;
             
+            // Optimized: Use copy_nonoverlapping for row-by-row copy (faster than pixel-by-pixel)
             for y in 0..win_h {
                 let fb_y = win_y + y;
                 if fb_y >= fb_h {
                     break;
                 }
                 
-                for x in 0..win_w {
-                    let fb_x = win_x + x;
-                    if fb_x >= fb_w {
-                        break;
-                    }
-                    
-                    let pixel = *win_buffer.add(y * win_w + x);
-                    *fb_ptr.add(fb_y * pitch + fb_x) = pixel;
+                let visible_width = core::cmp::min(win_w, fb_w.saturating_sub(win_x));
+                if visible_width == 0 {
+                    continue;
                 }
+                
+                let src = win_buffer.add(y * win_w);
+                let dst = fb_ptr.add(fb_y * pitch + win_x);
+                
+                // Fast copy entire row at once
+                core::ptr::copy_nonoverlapping(src, dst, visible_width);
             }
         }
     }
 
     fn update(&mut self) {
-        // Optimized: Only render when something actually changed
-        // Check if any window needs rendering (invalidated or being dragged)
-        let needs_render = unsafe {
+        // Check if cursor moved BEFORE any rendering operations
+        let cursor_moved = self.mouse_x != self.last_cursor_x || 
+                           self.mouse_y != self.last_cursor_y;
+        
+        let needs_window_render = unsafe {
             if self.window_count == 0 {
-                // No windows, but cursor might have moved - always render cursor
                 false
             } else {
-                // Always render when dragging (for smooth movement)
-                if self.dragging_window.is_some() {
-                    true
-                } else {
-                    // Check if any window is invalidated
-                    let mut needs = false;
-                    for i in 0..self.window_count {
-                        if let Some(window) = self.windows[i] {
-                            if (*window).invalidated {
-                                needs = true;
-                                break;
-                            }
-                        }
-                    }
-                    needs
-                }
+                self.dragging_window.is_some() || 
+                self.windows.iter()
+                    .take(self.window_count)
+                    .filter_map(|&w| w)
+                    .any(|w| (*w).invalidated)
             }
         };
         
-        if needs_render {
-            self.render();
-        } else {
-            // Even if windows don't need rendering, cursor might have moved
-            // Render cursor only (lightweight operation)
-            unsafe {
-                let fb = self.get_framebuffer();
-                if !fb.is_null() {
-                    self.render_cursor(fb);
+        // Only render if something changed
+        if needs_window_render || cursor_moved {
+            if needs_window_render {
+                self.render(); // This calls render_cursor at the end
+            } else if cursor_moved {
+                // Only cursor moved, render it alone
+                unsafe {
+                    let fb = self.get_framebuffer();
+                    if !fb.is_null() {
+                        self.render_cursor(fb);
+                    }
+                }
+            }
+        }
+    }
+
+    // Optimized desktop clear using faster fill methods
+    fn clear_desktop_fast(&mut self, fb: *mut LimineFramebuffer) {
+        unsafe {
+            let fb_ptr = (*fb).address;
+            let _width = (*fb).width as usize;
+            let height = (*fb).height as usize;
+            let pitch = (*fb).pitch as usize / 4;
+            let color = self.desktop_color;
+            
+            // Fill entire framebuffer row by row using write_volatile
+            // This is faster than pixel-by-pixel and prevents optimization
+            for y in 0..height {
+                let row_ptr = fb_ptr.add(y * pitch);
+                for x in 0.._width {
+                    core::ptr::write_volatile(row_ptr.add(x), color);
                 }
             }
         }
@@ -1151,6 +1308,24 @@ pub extern "C" fn wm_get_window_info(index: c_int, x: *mut c_int, y: *mut c_int,
                     *title_dest.add(i) = 0;
                 }
             }
+        }
+    }
+}
+
+#[no_mangle]
+pub extern "C" fn wm_resize_window(window: *mut Window, new_width: u32, new_height: u32) {
+    unsafe {
+        if let Some(ref mut wm) = WM_STATE {
+            wm.resize_window(window, new_width, new_height);
+        }
+    }
+}
+
+#[no_mangle]
+pub extern "C" fn wm_bring_to_front(window: *mut Window) {
+    unsafe {
+        if let Some(ref mut wm) = WM_STATE {
+            wm.bring_to_front(window);
         }
     }
 }
