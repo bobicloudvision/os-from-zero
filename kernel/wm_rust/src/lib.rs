@@ -57,6 +57,11 @@ pub struct Window {
 // Window manager state
 static mut WM_STATE: Option<WindowManager> = None;
 
+// Window pool for static allocation (shared between create and destroy)
+static mut WINDOW_POOL: [Option<Window>; 32] = [const { None }; 32];
+const MAX_BUFFER_SIZE: usize = 1920 * 1080; // HD support
+static mut BUFFER_POOL: [[u32; MAX_BUFFER_SIZE]; 32] = [[0; MAX_BUFFER_SIZE]; 32];
+
 // Track previous window positions for proper erasing
 #[derive(Copy, Clone)]
 struct WindowPosition {
@@ -108,9 +113,6 @@ impl WindowManager {
 
         // Allocate window structure
         let window = unsafe {
-            // Simple static allocation for now (in real OS, use proper allocator)
-            static mut WINDOW_POOL: [Option<Window>; 32] = [const { None }; 32];
-            
             // Find an empty slot
             let mut slot_idx = None;
             for i in 0..32 {
@@ -127,7 +129,7 @@ impl WindowManager {
             
             // Initialize window in the slot
             let mut new_window = Window {
-                id: self.window_count as u32,
+                id: slot as u32, // Use slot index as ID for uniqueness
                 x: x,
                 y: y,
                 width: width,
@@ -142,19 +144,21 @@ impl WindowManager {
             };
             
             // Copy title
-            let mut i = 0;
-            let title_bytes = title as *const u8;
-            while i < 63 && *title_bytes.add(i) != 0 {
-                new_window.title[i] = *title_bytes.add(i);
-                i += 1;
+            if !title.is_null() {
+                let mut i = 0;
+                let title_bytes = title as *const u8;
+                while i < 63 && *title_bytes.add(i) != 0 {
+                    new_window.title[i] = *title_bytes.add(i);
+                    i += 1;
+                }
+                new_window.title[i] = 0;
+            } else {
+                new_window.title[0] = 0;
             }
-            new_window.title[i] = 0;
             
             // Allocate window buffer - each window gets its own buffer
             // Support HD resolutions: 1920x1080 = 2,073,600 pixels
             let buffer_size = (width * height) as usize;
-            const MAX_BUFFER_SIZE: usize = 1920 * 1080; // HD support
-            static mut BUFFER_POOL: [[u32; MAX_BUFFER_SIZE]; 32] = [[0; MAX_BUFFER_SIZE]; 32];
             if buffer_size <= MAX_BUFFER_SIZE {
                 new_window.buffer = BUFFER_POOL[slot].as_mut_ptr();
             } else {
@@ -198,6 +202,14 @@ impl WindowManager {
                 // Erase window area from framebuffer
                 // Use the exact window bounds to ensure complete erasure
                 self.erase_window_area(fb, (*window).x, (*window).y, (*window).width, (*window).height);
+            }
+        }
+        
+        // Find and free the window slot in WINDOW_POOL using window ID (which is the slot index)
+        unsafe {
+            let window_id = (*window).id as usize;
+            if window_id < 32 {
+                WINDOW_POOL[window_id] = None;
             }
         }
         
@@ -319,11 +331,16 @@ impl WindowManager {
                 return;
             }
             
+            if text.is_null() {
+                return;
+            }
+            
             let mut current_x = x;
             let text_bytes = text as *const u8;
             let mut i = 0;
+            const MAX_TEXT_LENGTH: usize = 1024; // Prevent infinite loops from unterminated strings
             
-            while *text_bytes.add(i) != 0 {
+            while i < MAX_TEXT_LENGTH && *text_bytes.add(i) != 0 {
                 let ch = *text_bytes.add(i) as usize;
                 if ch >= 32 && ch <= 126 {
                     draw_char_to_window(window, ch as u8, current_x, y, color);
@@ -492,16 +509,30 @@ impl WindowManager {
             let fb_w = (*fb).width as usize;
             let fb_h = (*fb).height as usize;
             
-            // Calculate bounds with proper clamping
+            // Calculate bounds with proper clamping and overflow protection
             let start_x = if x < 0 { 0 } else { x as usize };
             let start_y = if y < 0 { 0 } else { y as usize };
             let end_x = {
-                let calculated = (x as i64 + width as i64) as usize;
-                if calculated > fb_w { fb_w } else { calculated }
+                // Check for overflow before casting
+                let x_i64 = x as i64;
+                let width_i64 = width as i64;
+                if x_i64 > 0 && width_i64 > 0 && x_i64 > (usize::MAX as i64) - width_i64 {
+                    fb_w // Overflow protection: clamp to framebuffer width
+                } else {
+                    let calculated = (x_i64 + width_i64) as usize;
+                    if calculated > fb_w { fb_w } else { calculated }
+                }
             };
             let end_y = {
-                let calculated = (y as i64 + height as i64) as usize;
-                if calculated > fb_h { fb_h } else { calculated }
+                // Check for overflow before casting
+                let y_i64 = y as i64;
+                let height_i64 = height as i64;
+                if y_i64 > 0 && height_i64 > 0 && y_i64 > (usize::MAX as i64) - height_i64 {
+                    fb_h // Overflow protection: clamp to framebuffer height
+                } else {
+                    let calculated = (y_i64 + height_i64) as usize;
+                    if calculated > fb_h { fb_h } else { calculated }
+                }
             };
             
             // Ensure we have valid bounds
