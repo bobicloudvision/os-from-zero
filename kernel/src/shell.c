@@ -23,8 +23,17 @@ static void check_mouse_events(void) {
         if (mouse_has_data()) {
             mouse_handle_interrupt();
             update_mouse_cursor();
+            
+            // Notify window manager of mouse events
+            extern void wm_handle_mouse(int mouse_x, int mouse_y, bool left_button);
+            mouse_state_t *mouse = mouse_get_state();
+            wm_handle_mouse(mouse->x, mouse->y, mouse->left_button);
         }
     }
+    
+    // Update window manager
+    extern void wm_update(void);
+    wm_update();
 }
 
 // Command registry

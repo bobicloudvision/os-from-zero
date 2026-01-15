@@ -112,6 +112,16 @@ override LDFLAGS += \
     --gc-sections \
     -T linker-scripts/x86_64.lds
 
+# Rust toolchain
+RUSTC := rustc
+CARGO := cargo
+
+# Check if Rust is available
+RUST_AVAILABLE := $(shell command -v $(RUSTC) >/dev/null 2>&1 && echo yes || echo no)
+
+# Rust library path
+RUST_LIB := wm_rust/target/x86_64-unknown-none/release/libwm_rust.a
+
 # Use "find" to glob all *.c, *.S, and *.asm files in the tree and obtain the
 # object and header dependency file names.
 override SRCFILES := $(shell find -L src cc-runtime/src -type f 2>/dev/null | LC_ALL=C sort)
@@ -121,15 +131,34 @@ override NASMFILES := $(filter %.asm,$(SRCFILES))
 override OBJ := $(addprefix obj/,$(CFILES:.c=.c.o) $(ASFILES:.S=.S.o) $(NASMFILES:.asm=.asm.o))
 override HEADER_DEPS := $(addprefix obj/,$(CFILES:.c=.c.d) $(ASFILES:.S=.S.d))
 
+# Add Rust library to objects if available
+ifeq ($(RUST_AVAILABLE),yes)
+override OBJ += $(RUST_LIB)
+endif
+
 # Default target. This must come first, before header dependencies.
 .PHONY: all
 all: bin/$(OUTPUT)
+
+# Build Rust library
+.PHONY: rust-lib
+rust-lib: $(RUST_LIB)
+
+$(RUST_LIB): wm_rust/Cargo.toml wm_rust/src/lib.rs
+ifeq ($(RUST_AVAILABLE),yes)
+	@echo "Building Rust window manager..."
+	cd wm_rust && $(CARGO) build --release --target x86_64-unknown-none
+else
+	@echo "Warning: Rust not available, skipping Rust window manager"
+	@mkdir -p $(dir $(RUST_LIB))
+	@touch $(RUST_LIB)
+endif
 
 # Include header dependencies.
 -include $(HEADER_DEPS)
 
 # Link rules for the final executable.
-bin/$(OUTPUT): GNUmakefile linker-scripts/x86_64.lds $(OBJ)
+bin/$(OUTPUT): GNUmakefile linker-scripts/x86_64.lds rust-lib $(OBJ)
 	mkdir -p "$$(dirname $@)"
 	$(LD) $(OBJ) $(LDFLAGS) -o $@
 
@@ -152,6 +181,9 @@ obj/%.asm.o: %.asm GNUmakefile
 .PHONY: clean
 clean:
 	rm -rf bin obj
+ifeq ($(RUST_AVAILABLE),yes)
+	cd wm_rust && $(CARGO) clean 2>/dev/null || true
+endif
 
 # Remove everything built and generated including downloaded dependencies.
 .PHONY: distclean

@@ -10,6 +10,7 @@
 #include "process.h"
 #include "audio.h"
 #include "fpu_simple.h"
+#include "window_manager_rust.h"
 
 // Global framebuffer pointer for graphics3d system
 struct limine_framebuffer *g_framebuffer = NULL;
@@ -209,6 +210,9 @@ void kmain(void) {
     
     // Success beep to indicate video is working
     audio_play_event(AUDIO_STARTUP_SOUND);
+    
+    // Initialize Rust window manager
+    wm_init(framebuffer);
     
     // Initialize filesystem and process system
     fs_init();

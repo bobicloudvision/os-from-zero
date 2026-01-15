@@ -1,9 +1,7 @@
 #include "system_widgets.h"
 #include "../system_monitor.h"
 #include "../string.h"
-
-// Window manager removed - widgets will not function without it
-// These functions are kept for compilation but will not work
+#include "../window_manager_rust.h"
 #include <stddef.h>
 
 // Widget registry
