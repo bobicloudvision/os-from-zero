@@ -136,11 +136,15 @@ impl WindowManager {
             new_window.title[i] = 0;
             
             // Allocate window buffer - each window gets its own buffer
+            // Use a reasonable max size (800x600 = 480000 pixels)
             let buffer_size = (width * height) as usize;
-            // Use a larger buffer pool and allocate per-window
-            static mut BUFFER_POOL: [[u32; 1024 * 768]; 32] = [[0; 1024 * 768]; 32];
-            if buffer_size <= BUFFER_POOL[slot].len() {
+            const MAX_BUFFER_SIZE: usize = 800 * 600;
+            static mut BUFFER_POOL: [[u32; MAX_BUFFER_SIZE]; 32] = [[0; MAX_BUFFER_SIZE]; 32];
+            if buffer_size <= MAX_BUFFER_SIZE {
                 new_window.buffer = BUFFER_POOL[slot].as_mut_ptr();
+            } else {
+                // Window too large, can't allocate buffer
+                return ptr::null_mut();
             }
             
             WINDOW_POOL[slot] = Some(new_window);
@@ -155,7 +159,10 @@ impl WindowManager {
         self.windows[self.window_count] = Some(window);
         self.window_count += 1;
         self.focused_window = Some(window);
-        unsafe { (*window).focused = true; }
+        unsafe { 
+            (*window).focused = true;
+            (*window).invalidated = true; // Force initial render
+        }
 
         window
     }
@@ -200,7 +207,7 @@ impl WindowManager {
             for i in 0..size {
                 *buffer.add(i) = color;
             }
-            (*window).invalidated = true;
+            // Don't set invalidated here - we're clearing as part of rendering
         }
     }
 
@@ -217,7 +224,7 @@ impl WindowManager {
             let buffer = (*window).buffer;
             let index = (y as u32 * (*window).width + x as u32) as usize;
             *buffer.add(index) = color;
-            (*window).invalidated = true;
+            // Don't set invalidated - we'll render when update is called
         }
     }
 
@@ -241,7 +248,7 @@ impl WindowManager {
                     }
                 }
             }
-            (*window).invalidated = true;
+            // Don't set invalidated - we'll render when update is called
         }
     }
 
@@ -276,7 +283,7 @@ impl WindowManager {
                 }
                 i += 1;
             }
-            (*window).invalidated = true;
+            // Don't set invalidated - we'll render when update is called
         }
     }
 
@@ -285,6 +292,9 @@ impl WindowManager {
         if let Some(dragging) = self.dragging_window {
             if left_button {
                 unsafe {
+                    let old_x = (*dragging).x;
+                    let old_y = (*dragging).y;
+                    
                     (*dragging).x = mouse_x - self.drag_offset_x;
                     (*dragging).y = mouse_y - self.drag_offset_y;
                     
@@ -302,6 +312,11 @@ impl WindowManager {
                     if (*dragging).y + (*dragging).height as i32 > (*fb).height as i32 {
                         (*dragging).y = (*fb).height as i32 - (*dragging).height as i32;
                     }
+                    
+                    // Invalidate if position changed
+                    if old_x != (*dragging).x || old_y != (*dragging).y {
+                        (*dragging).invalidated = true;
+                    }
                 }
             } else {
                 self.dragging_window = None;
@@ -318,25 +333,45 @@ impl WindowManager {
                         let wx = (*window).x;
                         let wy = (*window).y;
                         let ww = (*window).width as i32;
-                        let _wh = (*window).height as i32;
+                        let wh = (*window).height as i32;
                         
-                        // Check if click is in title bar (top 20 pixels)
+                        // Check if click is within window bounds
                         if mouse_x >= wx && mouse_x < wx + ww &&
-                           mouse_y >= wy && mouse_y < wy + 20 {
-                            // Focus this window
-                            if let Some(old_focused) = self.focused_window {
-                                (*old_focused).focused = false;
-                            }
-                            self.focused_window = Some(window);
-                            (*window).focused = true;
+                           mouse_y >= wy && mouse_y < wy + wh {
                             
-                            // Start dragging if window is movable
-                            if ((*window).flags & WINDOW_MOVABLE) != 0 {
-                                self.dragging_window = Some(window);
-                                self.drag_offset_x = mouse_x - wx;
-                                self.drag_offset_y = mouse_y - wy;
+                            // Check if click is on close button
+                            if ((*window).flags & WINDOW_CLOSABLE) != 0 {
+                                let close_x = wx + (*window).width as i32 - 18;
+                                let close_y = wy + 2;
+                                if mouse_x >= close_x && mouse_x < close_x + 16 &&
+                                   mouse_y >= close_y && mouse_y < close_y + 16 {
+                                    // Close button clicked
+                                    self.destroy_window(window);
+                                    return;
+                                }
                             }
-                            break;
+                            
+                            // Check if click is in title bar (top 20 pixels)
+                            if mouse_y >= wy && mouse_y < wy + 20 {
+                                // Focus this window
+                                if let Some(old_focused) = self.focused_window {
+                                    if old_focused != window {
+                                        (*old_focused).focused = false;
+                                        (*old_focused).invalidated = true;
+                                    }
+                                }
+                                self.focused_window = Some(window);
+                                (*window).focused = true;
+                                (*window).invalidated = true;
+                                
+                                // Start dragging if window is movable
+                                if ((*window).flags & WINDOW_MOVABLE) != 0 {
+                                    self.dragging_window = Some(window);
+                                    self.drag_offset_x = mouse_x - wx;
+                                    self.drag_offset_y = mouse_y - wy;
+                                }
+                            }
+                            break; // Stop checking other windows
                         }
                     }
                 }
@@ -380,7 +415,11 @@ impl WindowManager {
 
     fn render_window(&mut self, window: *mut Window, fb: *mut LimineFramebuffer) {
         unsafe {
-            if (*window).buffer.is_null() || (*window).invalidated {
+            if (*window).buffer.is_null() {
+                return; // Can't render without a buffer
+            }
+            
+            if (*window).invalidated {
                 // Clear window buffer
                 self.clear_window(window, 0x2d2d2d); // Window background
                 
@@ -388,9 +427,9 @@ impl WindowManager {
                 let title_color = if (*window).focused { 0x4a90e2 } else { 0x404040 };
                 self.draw_filled_rect_to_window(window, 0, 0, (*window).width, 20, title_color);
                 
-            // Draw title text
-            let title_ptr = (*window).title.as_ptr() as *const c_char;
-            self.draw_text_to_window(window, title_ptr, 4, 4, 0xffffff);
+                // Draw title text
+                let title_ptr = (*window).title.as_ptr() as *const c_char;
+                self.draw_text_to_window(window, title_ptr, 4, 4, 0xffffff);
                 
                 // Draw close button if closable
                 if ((*window).flags & WINDOW_CLOSABLE) != 0 {
@@ -443,10 +482,7 @@ impl WindowManager {
     }
 
     fn update(&mut self) {
-        // Handle mouse input (called from C)
-        // Mouse handling is done via handle_mouse which is called externally
-        
-        // Render
+        // Render all windows (mouse handling is done via handle_mouse which is called externally)
         self.render();
     }
 }

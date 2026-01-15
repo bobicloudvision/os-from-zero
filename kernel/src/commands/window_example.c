@@ -17,6 +17,7 @@ void create_simple_window_example(void) {
         wm_draw_text_to_window(win, "using the Rust window manager!", 10, 70, 0x00ff00);
         wm_draw_text_to_window(win, "You can drag this window", 10, 90, 0xffff00);
         wm_draw_text_to_window(win, "by clicking the title bar.", 10, 110, 0xffff00);
+        wm_invalidate_window(win); // Force redraw
     }
 }
 
@@ -130,6 +131,10 @@ static void cmd_windows(const char *args) {
         terminal_print("Creating window examples...\n");
         run_window_examples();
         terminal_print("Windows created! Try moving them with your mouse.\n");
+        terminal_print("Click and drag the title bar to move windows.\n");
+        // Force an update to render the windows
+        extern void wm_update(void);
+        wm_update();
     } else {
         // Parse specific example
         if (strcmp(args, "simple") == 0) {

@@ -25,16 +25,19 @@ static void check_mouse_events(void) {
             mouse_handle_interrupt();
             update_mouse_cursor();
             
-            // Notify window manager of mouse events
-            extern void wm_handle_mouse(int mouse_x, int mouse_y, bool left_button);
-            mouse_state_t *mouse = mouse_get_state();
-            wm_handle_mouse(mouse->x, mouse->y, mouse->left_button);
+            // Mouse handling for window manager is done below
         }
     }
     
-    // Update window manager (only if windows exist)
+    // Handle window manager mouse and update
+    extern void wm_handle_mouse(int mouse_x, int mouse_y, bool left_button);
     extern void wm_update(void);
     extern int wm_get_window_count(void);
+    
+    mouse_state_t *mouse = mouse_get_state();
+    wm_handle_mouse(mouse->x, mouse->y, mouse->left_button);
+    
+    // Update window manager (only if windows exist)
     if (wm_get_window_count() > 0) {
         wm_update();
     }
