@@ -15,9 +15,17 @@ typedef struct {
     float angle_z;
     uint32_t frame_count;
     bool animating;
-    uint32_t animation_duration_frames;  // Total frames to animate
+    uint64_t animation_start_time;        // Start time in CPU cycles
+    uint64_t animation_duration_cycles;   // Duration in CPU cycles (e.g., 3 seconds)
     bool animation_complete;              // True when animation has finished
 } gpu_3d_state_t;
+
+// Get current CPU timestamp counter (RDTSC)
+static uint64_t get_cpu_timestamp(void) {
+    uint32_t low, high;
+    __asm__ volatile ("rdtsc" : "=a" (low), "=d" (high));
+    return ((uint64_t)high << 32) | low;
+}
 
 // Simple delay function for animation
 static void delay_animation(uint32_t iterations) {
@@ -206,23 +214,31 @@ static void draw_3d_animation(window_t *win) {
     
     // Update rotation angles for animation (only if not complete)
     if (state->animating && !state->animation_complete) {
-        state->angle_x += 0.05f;
-        state->angle_y += 0.03f;
-        state->angle_z += 0.02f;
+        // Check elapsed time
+        uint64_t current_time = get_cpu_timestamp();
+        uint64_t elapsed_cycles = current_time - state->animation_start_time;
         
-        // Keep angles in reasonable range
-        if (state->angle_x > 6.28f) state->angle_x -= 6.28f;
-        if (state->angle_y > 6.28f) state->angle_y -= 6.28f;
-        if (state->angle_z > 6.28f) state->angle_z -= 6.28f;
-        
-        state->frame_count++;
-        
-        // Check if animation duration has been reached (approximately 3-4 seconds)
-        // Assuming ~15-20 frames per second with our delay
-        if (state->frame_count >= state->animation_duration_frames) {
+        // Check if animation duration has been reached (time-based)
+        if (elapsed_cycles >= state->animation_duration_cycles) {
             state->animation_complete = true;
             state->animating = false;
+        } else {
+            // Continue animating - update rotation angles
+            // Rotation speed is time-independent (based on elapsed cycles)
+            float time_factor = (float)elapsed_cycles / (float)state->animation_duration_cycles;
+            
+            // Update angles based on time progression (smooth rotation)
+            state->angle_x = time_factor * 6.28f;  // Full rotation over duration
+            state->angle_y = time_factor * 3.14f;  // Half rotation
+            state->angle_z = time_factor * 4.71f;  // 3/4 rotation
+            
+            // Keep angles in reasonable range
+            while (state->angle_x > 6.28f) state->angle_x -= 6.28f;
+            while (state->angle_y > 6.28f) state->angle_y -= 6.28f;
+            while (state->angle_z > 6.28f) state->angle_z -= 6.28f;
         }
+        
+        state->frame_count++;
     }
     
     // Draw info text
@@ -393,6 +409,15 @@ void cmd_gpu_test(const char *args) {
                                              WINDOW_MOVABLE | WINDOW_CLOSABLE);
     
     if (anim_window) {
+        // Get initial timestamp for time-based animation
+        uint64_t start_time = get_cpu_timestamp();
+        
+        // Estimate CPU frequency (typical modern CPU: ~2-3 GHz)
+        // For 3 seconds at ~2.5 GHz: 3 * 2,500,000,000 = 7,500,000,000 cycles
+        // Using a conservative estimate that works across different CPUs
+        // Assuming ~1-2 GHz minimum: 3 seconds = 3,000,000,000 cycles (3 billion)
+        uint64_t animation_duration_cycles = 3000000000ULL; // 3 seconds at ~1 GHz
+        
         // Allocate animation state
         static gpu_3d_state_t anim_state = {
             .angle_x = 0.0f,
@@ -400,9 +425,14 @@ void cmd_gpu_test(const char *args) {
             .angle_z = 0.0f,
             .frame_count = 0,
             .animating = true,
-            .animation_duration_frames = 60,  // Animate for ~3-4 seconds (60 frames)
+            .animation_start_time = 0,
+            .animation_duration_cycles = 0,
             .animation_complete = false
         };
+        
+        // Initialize time-based animation
+        anim_state.animation_start_time = start_time;
+        anim_state.animation_duration_cycles = animation_duration_cycles;
         
         // Set draw callback and user data
         anim_window->draw_callback = draw_3d_animation;
@@ -412,19 +442,30 @@ void cmd_gpu_test(const char *args) {
         wm_invalidate_window(anim_window);
         wm_update();
         
-        terminal_print("Running 3D animation (3-4 seconds)...\n");
+        terminal_print("Running 3D animation (3 seconds, time-based)...\n");
         
-        // Animate for specified duration
-        uint32_t max_frames = anim_state.animation_duration_frames;
-        for (uint32_t frame = 0; frame < max_frames; frame++) {
-            // Only invalidate if animation is still running
-            if (!anim_state.animation_complete) {
+        // Animate until time duration is reached
+        uint64_t last_time = start_time;
+        while (!anim_state.animation_complete) {
+            uint64_t current_time = get_cpu_timestamp();
+            uint64_t elapsed = current_time - anim_state.animation_start_time;
+            
+            // Invalidate window to trigger redraw (animation updates in draw callback)
+            if (elapsed < anim_state.animation_duration_cycles) {
                 wm_invalidate_window(anim_window);
             }
             wm_update();
             
-            // Small delay for animation speed (~15-20 FPS)
-            delay_animation(500000);
+            // Small delay to control frame rate (~30 FPS)
+            // Only delay if we're rendering too fast
+            uint64_t time_since_last_frame = current_time - last_time;
+            uint64_t target_frame_time = animation_duration_cycles / 90; // ~30 FPS over 3 seconds
+            
+            if (time_since_last_frame < target_frame_time) {
+                delay_animation(200000); // Small delay to prevent excessive CPU usage
+            }
+            
+            last_time = get_cpu_timestamp();
             
             // Check if window still exists
             extern int wm_get_window_count(void);
@@ -432,17 +473,15 @@ void cmd_gpu_test(const char *args) {
                 break; // Window was closed
             }
             
-            // Break early if animation completed
-            if (anim_state.animation_complete) {
+            // Check if animation time has elapsed
+            if (elapsed >= anim_state.animation_duration_cycles) {
+                anim_state.animation_complete = true;
+                anim_state.animating = false;
                 break;
             }
         }
         
         // Final render to show completed state
-        if (!anim_state.animation_complete) {
-            anim_state.animation_complete = true;
-            anim_state.animating = false;
-        }
         wm_invalidate_window(anim_window);
         wm_update();
         
