@@ -19,7 +19,7 @@ static char input_buffer[256];
 static size_t input_pos = 0;
 
 // Helper function to check and handle mouse events
-static void check_mouse_events(void) {
+void check_mouse_events(void) {
     // Check for mouse events multiple times for better responsiveness
     for (int i = 0; i < 10; i++) {
         if (mouse_has_data()) {

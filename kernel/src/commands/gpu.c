@@ -4,6 +4,7 @@
 #include "../terminal.h"
 #include "../shell.h"
 #include "../pci.h"
+#include "../mouse.h"
 #include <stddef.h>
 #include <stdint.h>
 #include <stdbool.h>
@@ -14,10 +15,12 @@ typedef struct {
     float angle_y;
     float angle_z;
     uint32_t frame_count;
-    bool animating;
-    uint64_t animation_start_time;        // Start time in CPU cycles
-    uint64_t animation_duration_cycles;   // Duration in CPU cycles (e.g., 3 seconds)
-    bool animation_complete;              // True when animation has finished
+    bool animating;                       // True if animation is running
+    uint64_t animation_start_time;        // Start time in CPU cycles (for continuous rotation)
+    uint64_t animation_duration_cycles;   // Not used for continuous animation (kept for compatibility)
+    bool animation_complete;              // Not used for continuous animation (kept for compatibility)
+    uint64_t last_frame_time;            // Time of last frame for frame rate control
+    uint64_t target_frame_interval;      // Target time between frames (~30 FPS)
 } gpu_3d_state_t;
 
 // Get current CPU timestamp counter (RDTSC)
@@ -199,6 +202,38 @@ static void draw_3d_animation(window_t *win) {
     }
     
     gpu_3d_state_t *state = (gpu_3d_state_t *)win->user_data;
+    uint64_t current_time = get_cpu_timestamp();
+    
+    // Update rotation angles for continuous animation
+    if (state->animating) {
+        // Frame rate control: only update angles if enough time has passed
+        uint64_t time_since_last_frame = current_time - state->last_frame_time;
+        
+        if (time_since_last_frame >= state->target_frame_interval) {
+            // Calculate elapsed time since animation started
+            uint64_t elapsed_cycles = current_time - state->animation_start_time;
+            
+            // Use a fixed rotation speed (cycles per full rotation)
+            // For smooth animation: ~2 seconds per full rotation at ~1 GHz = 2 billion cycles
+            uint64_t cycles_per_rotation = 2000000000ULL; // 2 seconds per rotation at ~1 GHz
+            
+            // Calculate continuous rotation angles (wraps around automatically)
+            float rotation_factor = (float)(elapsed_cycles % cycles_per_rotation) / (float)cycles_per_rotation;
+            
+            // Update angles for continuous rotation
+            state->angle_x = rotation_factor * 6.28f;  // Full rotation (2π)
+            state->angle_y = rotation_factor * 3.14f;  // Half rotation (π)
+            state->angle_z = rotation_factor * 4.71f;  // 3/4 rotation (3π/2)
+            
+            // Keep angles in [0, 2π) range
+            while (state->angle_x >= 6.28f) state->angle_x -= 6.28f;
+            while (state->angle_y >= 6.28f) state->angle_y -= 6.28f;
+            while (state->angle_z >= 6.28f) state->angle_z -= 6.28f;
+            
+            state->last_frame_time = current_time;
+            state->frame_count++;
+        }
+    }
     
     // Clear window content area (below title bar)
     wm_clear_window(win, 0x000000);
@@ -212,33 +247,12 @@ static void draw_3d_animation(window_t *win) {
     // Draw the 3D cube
     draw_3d_cube(win, state, center_x, center_y, cube_size, scale);
     
-    // Update rotation angles for animation (only if not complete)
-    if (state->animating && !state->animation_complete) {
-        // Check elapsed time
-        uint64_t current_time = get_cpu_timestamp();
-        uint64_t elapsed_cycles = current_time - state->animation_start_time;
-        
-        // Check if animation duration has been reached (time-based)
-        if (elapsed_cycles >= state->animation_duration_cycles) {
-            state->animation_complete = true;
-            state->animating = false;
-        } else {
-            // Continue animating - update rotation angles
-            // Rotation speed is time-independent (based on elapsed cycles)
-            float time_factor = (float)elapsed_cycles / (float)state->animation_duration_cycles;
-            
-            // Update angles based on time progression (smooth rotation)
-            state->angle_x = time_factor * 6.28f;  // Full rotation over duration
-            state->angle_y = time_factor * 3.14f;  // Half rotation
-            state->angle_z = time_factor * 4.71f;  // 3/4 rotation
-            
-            // Keep angles in reasonable range
-            while (state->angle_x > 6.28f) state->angle_x -= 6.28f;
-            while (state->angle_y > 6.28f) state->angle_y -= 6.28f;
-            while (state->angle_z > 6.28f) state->angle_z -= 6.28f;
-        }
-        
-        state->frame_count++;
+    // Auto-invalidate for next frame to keep animation running continuously
+    // This makes the animation independent and continuous
+    if (state->animating) {
+        // Always invalidate to keep animation running
+        // The window manager will redraw this window on next update cycle
+        wm_invalidate_window(win);
     }
     
     // Draw info text
@@ -263,15 +277,10 @@ static void draw_3d_animation(window_t *win) {
     }
     frame_str[pos] = '\0';
     
-    uint32_t status_color = state->animation_complete ? 0x00ff00 : 0xffff00;
+    // Draw animation status (always running continuously)
+    uint32_t status_color = 0xffff00; // Yellow for running
     wm_draw_text_to_window(win, frame_str, 10, win->height - 50, status_color);
-    
-    // Draw animation status
-    if (state->animation_complete) {
-        wm_draw_text_to_window(win, "Animation: COMPLETE", 10, win->height - 30, 0x00ff00);
-    } else {
-        wm_draw_text_to_window(win, "Animation: RUNNING", 10, win->height - 30, 0xffff00);
-    }
+    wm_draw_text_to_window(win, "Animation: RUNNING", 10, win->height - 30, 0xffff00);
 }
 
 // GPU test command - demonstrates GPU rendering capabilities
@@ -409,14 +418,12 @@ void cmd_gpu_test(const char *args) {
                                              WINDOW_MOVABLE | WINDOW_CLOSABLE);
     
     if (anim_window) {
-        // Get initial timestamp for time-based animation
+        // Get initial timestamp for continuous animation
         uint64_t start_time = get_cpu_timestamp();
         
-        // Estimate CPU frequency (typical modern CPU: ~2-3 GHz)
-        // For 3 seconds at ~2.5 GHz: 3 * 2,500,000,000 = 7,500,000,000 cycles
-        // Using a conservative estimate that works across different CPUs
-        // Assuming ~1-2 GHz minimum: 3 seconds = 3,000,000,000 cycles (3 billion)
-        uint64_t animation_duration_cycles = 3000000000ULL; // 3 seconds at ~1 GHz
+        // Target frame rate: ~30 FPS
+        // At ~1 GHz: 1 second = 1 billion cycles, so 30 FPS = ~33 million cycles per frame
+        uint64_t target_frame_interval = 33000000ULL; // ~30 FPS at ~1 GHz
         
         // Allocate animation state
         static gpu_3d_state_t anim_state = {
@@ -426,66 +433,29 @@ void cmd_gpu_test(const char *args) {
             .frame_count = 0,
             .animating = true,
             .animation_start_time = 0,
-            .animation_duration_cycles = 0,
-            .animation_complete = false
+            .animation_duration_cycles = 0, // Not used for continuous animation
+            .animation_complete = false,     // Not used for continuous animation
+            .last_frame_time = 0,
+            .target_frame_interval = 0
         };
         
-        // Initialize time-based animation
+        // Initialize continuous animation
         anim_state.animation_start_time = start_time;
-        anim_state.animation_duration_cycles = animation_duration_cycles;
+        anim_state.last_frame_time = start_time;
+        anim_state.target_frame_interval = target_frame_interval;
         
         // Set draw callback and user data
         anim_window->draw_callback = draw_3d_animation;
         anim_window->user_data = &anim_state;
         
-        // Initial draw
+        // Initial draw - animation will continue independently and continuously
         wm_invalidate_window(anim_window);
         wm_update();
         
-        terminal_print("Running 3D animation (3 seconds, time-based)...\n");
-        
-        // Animate until time duration is reached
-        uint64_t last_time = start_time;
-        while (!anim_state.animation_complete) {
-            uint64_t current_time = get_cpu_timestamp();
-            uint64_t elapsed = current_time - anim_state.animation_start_time;
-            
-            // Invalidate window to trigger redraw (animation updates in draw callback)
-            if (elapsed < anim_state.animation_duration_cycles) {
-                wm_invalidate_window(anim_window);
-            }
-            wm_update();
-            
-            // Small delay to control frame rate (~30 FPS)
-            // Only delay if we're rendering too fast
-            uint64_t time_since_last_frame = current_time - last_time;
-            uint64_t target_frame_time = animation_duration_cycles / 90; // ~30 FPS over 3 seconds
-            
-            if (time_since_last_frame < target_frame_time) {
-                delay_animation(200000); // Small delay to prevent excessive CPU usage
-            }
-            
-            last_time = get_cpu_timestamp();
-            
-            // Check if window still exists
-            extern int wm_get_window_count(void);
-            if (wm_get_window_count() == 0) {
-                break; // Window was closed
-            }
-            
-            // Check if animation time has elapsed
-            if (elapsed >= anim_state.animation_duration_cycles) {
-                anim_state.animation_complete = true;
-                anim_state.animating = false;
-                break;
-            }
-        }
-        
-        // Final render to show completed state
-        wm_invalidate_window(anim_window);
-        wm_update();
-        
-        terminal_print("3D animation complete! Window remains open.\n");
+        terminal_print("3D animation started! It will run continuously and independently.\n");
+        terminal_print("The animation window will update automatically.\n");
+        terminal_print("You can interact with other windows while the animation runs.\n");
+        terminal_print("Close the animation window to stop it.\n");
     }
     
     terminal_print("\nGPU test windows created!\n");

@@ -12,5 +12,6 @@ void execute_command(const char *cmd);
 // Shell functions
 void shell_init(void);
 void shell_loop(void);
+void check_mouse_events(void);
 
 #endif // SHELL_H 

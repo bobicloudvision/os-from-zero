@@ -35,6 +35,8 @@ void keyboard_init(void) {
 
 // Read keyboard input
 char read_key(void) {
+    static uint32_t update_counter = 0;
+    
     while (1) {
         uint8_t status = inb(0x64);
         if (status & PS2_STATUS_OUTPUT_FULL) {
@@ -58,6 +60,15 @@ char read_key(void) {
                 if (c != 0) {
                     return c;
                 }
+            }
+        } else {
+            // No input available - periodically update window manager
+            // This allows animating windows to update independently
+            update_counter++;
+            if (update_counter >= 10000) {  // Update every ~10000 iterations
+                update_counter = 0;
+                extern void wm_update(void);
+                wm_update();
             }
         }
     }
