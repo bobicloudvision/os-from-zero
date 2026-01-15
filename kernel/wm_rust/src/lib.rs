@@ -372,11 +372,6 @@ impl WindowManager {
     }
 
     fn handle_mouse(&mut self, mouse_x: i32, mouse_y: i32, left_button: bool) {
-        // Update cursor position in display server
-        unsafe {
-            ds_update_cursor_position(mouse_x, mouse_y);
-        }
-        
         // Track button state for press detection
         let button_just_pressed = left_button && !self.last_mouse_button;
         self.last_mouse_button = left_button;
@@ -406,21 +401,40 @@ impl WindowManager {
                         (*dragging).y = (*fb).height as i32 - (*dragging).height as i32;
                     }
                     
-                    // Update surface position in display server
-                    ds_set_surface_position((*dragging).surface, (*dragging).x, (*dragging).y);
-                    
                     // Invalidate if position changed
                     if old_x != (*dragging).x || old_y != (*dragging).y {
-                        (*dragging).invalidated = true;
-                        ds_mark_dirty(old_x, old_y, (*dragging).width, (*dragging).height);
-                        ds_mark_dirty((*dragging).x, (*dragging).y, (*dragging).width, (*dragging).height);
+                        // Ensure window stays at top z-order (only update if needed)
+                        if (*dragging).z_order < self.next_z_order - 1 {
+                            (*dragging).z_order = self.next_z_order;
+                            self.next_z_order += 1;
+                            ds_set_surface_z_order((*dragging).surface, (*dragging).z_order);
+                        }
+                        
+                        // Update surface position in display server (marks old and new positions as dirty)
+                        ds_set_surface_position((*dragging).surface, (*dragging).x, (*dragging).y);
+                        
+                        // Don't update cursor position during drag to prevent cursor artifacts
+                        
+                        // Force immediate render to clear artifacts and show window at new position
+                        unsafe {
+                            ds_render();
+                        }
                     }
                 }
             } else {
                 // Button released - stop dragging
                 self.dragging_window = None;
+                // Update cursor position when drag ends
+                unsafe {
+                    ds_update_cursor_position(mouse_x, mouse_y);
+                }
             }
             return;
+        }
+        
+        // Not dragging - update cursor position normally
+        unsafe {
+            ds_update_cursor_position(mouse_x, mouse_y);
         }
 
         // Check for window focus and drag start
