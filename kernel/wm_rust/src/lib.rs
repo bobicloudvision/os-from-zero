@@ -1292,65 +1292,8 @@ impl WindowManager {
                         } else {
                             log_debug(b"update: window rendered successfully\0");
                         }
-                    } else {
-                        // Window not invalidated - check if it should be visible
-                        if (*window).maximized {
-                            logger_rust_log_fmt(0, b"WM\0".as_ptr() as *const c_char,
-                                b"update: maximized window id=%u not invalidated, pos=%d,%d, size=%ux%u, buffer=%p\0".as_ptr() as *const c_char,
-                                (*window).id, (*window).x, (*window).y, (*window).width, (*window).height, (*window).buffer);
-                            
-                            // Maximized windows should always be invalidated to ensure they're rendered
-                            // This is a safety check - if a maximized window is not invalidated,
-                            // force it to be invalidated and render it immediately
-                            log_error(b"update: maximized window not invalidated - forcing invalidation and rendering\0");
-                            (*window).invalidated = true;
-                            ds_mark_dirty((*window).x, (*window).y, (*window).width, (*window).height);
-                            
-                            // Now render it (same code as above, but inline here)
-                            logger_rust_log_fmt(0, b"WM\0".as_ptr() as *const c_char,
-                                b"update: rendering maximized window id=%u (forced), pos=%d,%d, size=%ux%u, buffer=%p\0".as_ptr() as *const c_char,
-                                (*window).id, (*window).x, (*window).y, (*window).width, (*window).height, (*window).buffer);
-                            
-                            if !(*window).buffer.is_null() {
-                                // Clear window buffer
-                                self.clear_window(window, 0x2d2d2d);
-                                
-                                // Draw window border and title bar
-                                let title_color = if (*window).focused { 0x4a90e2 } else { 0x404040 };
-                                self.draw_filled_rect_to_window(window, 0, 0, (*window).width, 20, title_color);
-                                
-                                // Draw title text
-                                let title_ptr = (*window).title.as_ptr() as *const c_char;
-                                self.draw_text_to_window(window, title_ptr, 4, 4, 0xffffff);
-                                
-                                // Draw window control buttons
-                                let mut button_x = (*window).width as i32 - 18;
-                                if ((*window).flags & WINDOW_CLOSABLE) != 0 {
-                                    self.draw_filled_rect_to_window(window, button_x, 2, 16, 16, 0xff4444);
-                                    draw_char_to_window(window, b'X', button_x + 2, 4, 0xffffff);
-                                    button_x -= 20;
-                                }
-                                self.draw_filled_rect_to_window(window, button_x, 2, 16, 16, 0x4444ff);
-                                draw_char_to_window(window, b'R', button_x + 2, 4, 0xffffff);
-                                button_x -= 20;
-                                self.draw_filled_rect_to_window(window, button_x, 2, 16, 16, 0x44ff44);
-                                draw_char_to_window(window, b'_', button_x + 2, 4, 0xffffff);
-                                
-                                // Call custom draw callback if set
-                                if let Some(callback) = (*window).draw_callback {
-                                    callback(window);
-                                }
-                                
-                                (*window).invalidated = false;
-                                ds_mark_dirty((*window).x, (*window).y, (*window).width, (*window).height);
-                                logger_rust_log_fmt(0, b"WM\0".as_ptr() as *const c_char,
-                                    b"update: maximized window id=%u rendered (forced), pos=%d,%d, size=%ux%u\0".as_ptr() as *const c_char,
-                                    (*window).id, (*window).x, (*window).y, (*window).width, (*window).height);
-                            } else {
-                                log_error(b"update: maximized window buffer is null - cannot render\0");
-                            }
-                        }
                     }
+                    // Window not invalidated - this is normal after rendering, no action needed
                 }
             }
         }
