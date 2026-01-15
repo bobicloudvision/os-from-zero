@@ -41,17 +41,12 @@ char read_key(void) {
             // Check if this data is from the auxiliary device (mouse)
             if (status & PS2_STATUS_AUXILIARY) {
                 // This is mouse data, handle it properly instead of discarding
-                extern void update_mouse_cursor(void);
-                
                 mouse_handle_interrupt();
-                update_mouse_cursor();
                 
-                // Also update window manager if windows exist
-                if (wm_get_window_count() > 0) {
-                    mouse_state_t *mouse = mouse_get_state();
-                    wm_handle_mouse(mouse->x, mouse->y, mouse->left_button);
-                    wm_update();
-                }
+                // Always update window manager (handles cursor rendering)
+                mouse_state_t *mouse = mouse_get_state();
+                wm_handle_mouse(mouse->x, mouse->y, mouse->left_button);
+                wm_update();
                 
                 continue;   // Keep waiting for keyboard data
             }

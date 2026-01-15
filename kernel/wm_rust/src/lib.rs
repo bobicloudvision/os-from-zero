@@ -83,6 +83,8 @@ struct WindowManager {
     last_mouse_button: bool,  // Track previous button state for click detection
     desktop_cleared: bool,    // Track if desktop has been cleared (only clear once)
     previous_positions: [Option<WindowPosition>; 32], // Track previous window positions
+    mouse_x: i32,              // Current mouse X position for cursor rendering
+    mouse_y: i32,              // Current mouse Y position for cursor rendering
 }
 
 impl WindowManager {
@@ -99,6 +101,8 @@ impl WindowManager {
             last_mouse_button: false,
             desktop_cleared: false,
             previous_positions: [const { None }; 32],
+            mouse_x: 0,
+            mouse_y: 0,
         }
     }
 
@@ -356,6 +360,10 @@ impl WindowManager {
     }
 
     fn handle_mouse(&mut self, mouse_x: i32, mouse_y: i32, left_button: bool) {
+        // Store mouse position for cursor rendering
+        self.mouse_x = mouse_x;
+        self.mouse_y = mouse_y;
+        
         // Track button state for press detection
         let button_just_pressed = left_button && !self.last_mouse_button;
         self.last_mouse_button = left_button;
@@ -469,33 +477,109 @@ impl WindowManager {
                 return;
             }
             
-            // Only render desktop and windows if we have windows
-            // Otherwise, let the terminal handle the display
-            if self.window_count == 0 {
-                return;
-            }
-            
             let width = (*fb).width as usize;
             let height = (*fb).height as usize;
             let pitch = (*fb).pitch as usize / 4;
             
-            // Optimized: Direct rendering - much faster than double buffering
-            // Clear desktop background only once when first window is created
-            if !self.desktop_cleared {
-                let fb_ptr = (*fb).address;
-                for y in 0..height {
-                    for x in 0..width {
-                        *fb_ptr.add(y * pitch + x) = self.desktop_color;
+            // Only render desktop and windows if we have windows
+            if self.window_count > 0 {
+                // Optimized: Direct rendering - much faster than double buffering
+                // Clear desktop background only once when first window is created
+                if !self.desktop_cleared {
+                    let fb_ptr = (*fb).address;
+                    for y in 0..height {
+                        for x in 0..width {
+                            *fb_ptr.add(y * pitch + x) = self.desktop_color;
+                        }
+                    }
+                    self.desktop_cleared = true;
+                }
+                
+                // Draw all windows (only invalidated windows will redraw their buffers)
+                // This is optimized - we only update what changed
+                for i in 0..self.window_count {
+                    if let Some(window) = self.windows[i] {
+                        self.render_window(window, fb);
                     }
                 }
-                self.desktop_cleared = true;
             }
             
-            // Draw all windows (only invalidated windows will redraw their buffers)
-            // This is optimized - we only update what changed
-            for i in 0..self.window_count {
-                if let Some(window) = self.windows[i] {
-                    self.render_window(window, fb);
+            // Always render cursor last to ensure it's on top (even when no windows)
+            self.render_cursor(fb);
+        }
+    }
+    
+    fn render_cursor(&mut self, fb: *mut LimineFramebuffer) {
+        unsafe {
+            // Mouse cursor bitmap (12x16 pixels)
+            const CURSOR_BITMAP: [u16; 16] = [
+                0b110000000000,  // ##
+                0b111000000000,  // ###
+                0b111100000000,  // ####
+                0b111110000000,  // #####
+                0b111111000000,  // ######
+                0b111111100000,  // #######
+                0b111111110000,  // ########
+                0b111111111000,  // #########
+                0b111111100000,  // #######
+                0b111111100000,  // #######
+                0b110110000000,  // ## ##
+                0b110011000000,  // ##  ##
+                0b100001100000,  // #    ##
+                0b000001100000,  //      ##
+                0b000000110000,  //       ##
+                0b000000110000   //       ##
+            ];
+            
+            const CURSOR_WIDTH: usize = 12;
+            const CURSOR_HEIGHT: usize = 16;
+            const CURSOR_COLOR: u32 = 0xFFFFFF; // White
+            const CURSOR_OUTLINE_COLOR: u32 = 0x000000; // Black
+            
+            let fb_ptr = (*fb).address;
+            let pitch = (*fb).pitch as usize / 4;
+            let fb_w = (*fb).width as usize;
+            let fb_h = (*fb).height as usize;
+            
+            let x = self.mouse_x as usize;
+            let y = self.mouse_y as usize;
+            
+            // Draw cursor with black outline first, then white fill
+            for row in 0..CURSOR_HEIGHT {
+                let bitmap_row = CURSOR_BITMAP[row];
+                for col in 0..CURSOR_WIDTH {
+                    if (bitmap_row & (1 << (11 - col))) != 0 {
+                        // Draw black outline pixels around the white pixel
+                        for dy in -1..=1 {
+                            for dx in -1..=1 {
+                                if dx == 0 && dy == 0 {
+                                    continue; // Skip center pixel
+                                }
+                                let px = x as i32 + col as i32 + dx;
+                                let py = y as i32 + row as i32 + dy;
+                                
+                                if px >= 0 && py >= 0 && 
+                                   px < fb_w as i32 && py < fb_h as i32 {
+                                    *fb_ptr.add((py as usize) * pitch + (px as usize)) = CURSOR_OUTLINE_COLOR;
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            
+            // Draw white cursor pixels on top
+            for row in 0..CURSOR_HEIGHT {
+                let bitmap_row = CURSOR_BITMAP[row];
+                for col in 0..CURSOR_WIDTH {
+                    if (bitmap_row & (1 << (11 - col))) != 0 {
+                        let px = x + col;
+                        let py = y + row;
+                        
+                        if px < fb_w && py < fb_h {
+                            *fb_ptr.add(py * pitch + px) = CURSOR_COLOR;
+                        }
+                    }
                 }
             }
         }
@@ -648,34 +732,43 @@ impl WindowManager {
     }
 
     fn update(&mut self) {
-        // Only render if we have windows
-        if self.window_count == 0 {
-            return;
-        }
-        
         // Optimized: Only render when something actually changed
         // Check if any window needs rendering (invalidated or being dragged)
         let needs_render = unsafe {
-            // Always render when dragging (for smooth movement)
-            if self.dragging_window.is_some() {
-                true
+            if self.window_count == 0 {
+                // No windows, but cursor might have moved - always render cursor
+                false
             } else {
-                // Check if any window is invalidated
-                let mut needs = false;
-                for i in 0..self.window_count {
-                    if let Some(window) = self.windows[i] {
-                        if (*window).invalidated {
-                            needs = true;
-                            break;
+                // Always render when dragging (for smooth movement)
+                if self.dragging_window.is_some() {
+                    true
+                } else {
+                    // Check if any window is invalidated
+                    let mut needs = false;
+                    for i in 0..self.window_count {
+                        if let Some(window) = self.windows[i] {
+                            if (*window).invalidated {
+                                needs = true;
+                                break;
+                            }
                         }
                     }
+                    needs
                 }
-                needs
             }
         };
         
         if needs_render {
             self.render();
+        } else {
+            // Even if windows don't need rendering, cursor might have moved
+            // Render cursor only (lightweight operation)
+            unsafe {
+                let fb = self.get_framebuffer();
+                if !fb.is_null() {
+                    self.render_cursor(fb);
+                }
+            }
         }
     }
 }

@@ -128,6 +128,7 @@ void run_window_examples(void) {
     // Force immediate render
     extern void wm_update(void);
     wm_update();
+    // Cursor is now rendered by the window manager
 }
 
 // Command handler for 'windows' command
@@ -142,6 +143,7 @@ static void cmd_windows(const char *args) {
         // Force an update to render the windows
         extern void wm_update(void);
         wm_update();
+        // Cursor is now rendered by the window manager
     } else {
         // Parse specific example
         if (strcmp(args, "simple") == 0) {

@@ -23,27 +23,19 @@ static void check_mouse_events(void) {
     for (int i = 0; i < 10; i++) {
         if (mouse_has_data()) {
             mouse_handle_interrupt();
-            update_mouse_cursor();
-            
-            // Mouse handling for window manager is done below
         }
     }
     
     // Handle window manager mouse and update
     extern void wm_handle_mouse(int mouse_x, int mouse_y, bool left_button);
     extern void wm_update(void);
-    extern int wm_get_window_count(void);
     
     mouse_state_t *mouse = mouse_get_state();
     
-    // Always handle mouse (for click detection even without windows)
+    // Always handle mouse and update window manager
+    // Window manager now handles cursor rendering in all cases
     wm_handle_mouse(mouse->x, mouse->y, mouse->left_button);
-    
-    // Update window manager (only if windows exist and something changed)
-    // The update function will check internally if rendering is needed
-    if (wm_get_window_count() > 0) {
-        wm_update();
-    }
+    wm_update();
 }
 
 // Command registry
@@ -157,8 +149,9 @@ void shell_loop(void) {
     // Play startup sound
     audio_play_event(AUDIO_STARTUP_SOUND);
     
-    // Draw initial mouse cursor
-    update_mouse_cursor();
+    // Initial window manager update to render cursor
+    extern void wm_update(void);
+    wm_update();
     
     while (1) {
         // Check for mouse events before showing prompt
