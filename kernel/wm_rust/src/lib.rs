@@ -328,11 +328,14 @@ impl WindowManager {
             return;
         }
 
-        // Check for window focus and drag start only on button press (transition from not pressed to pressed)
-        let button_pressed = left_button && !self.last_mouse_button;
+        // Check for window focus and drag start
+        // Track button state for press detection
+        let button_just_pressed = left_button && !self.last_mouse_button;
         self.last_mouse_button = left_button;
         
-        if button_pressed {
+        // Check windows on button press (transition from not pressed to pressed)
+        // Also check if button is held and we're not dragging (fallback for missed presses)
+        if button_just_pressed || (left_button && self.dragging_window.is_none()) {
             // Check windows in reverse order (top to bottom)
             for i in (0..self.window_count).rev() {
                 if let Some(window) = self.windows[i] {
@@ -348,7 +351,8 @@ impl WindowManager {
                            mouse_y >= wy && mouse_y < wy + wh {
                             
                             // Check if click is on close button (relative to window)
-                            if ((*window).flags & WINDOW_CLOSABLE) != 0 {
+                            // Only close on actual press, not on hold
+                            if button_just_pressed && ((*window).flags & WINDOW_CLOSABLE) != 0 {
                                 let close_x_start = wx + (*window).width as i32 - 18;
                                 let close_x_end = close_x_start + 16;
                                 let close_y_start = wy + 2;
@@ -367,7 +371,7 @@ impl WindowManager {
                             let title_bar_y_end = wy + 20;
                             
                             if mouse_y >= title_bar_y_start && mouse_y < title_bar_y_end {
-                                // Focus this window
+                                // Focus this window (always on any click in title bar)
                                 if let Some(old_focused) = self.focused_window {
                                     if old_focused != window {
                                         (*old_focused).focused = false;
@@ -378,12 +382,15 @@ impl WindowManager {
                                 (*window).focused = true;
                                 (*window).invalidated = true;
                                 
-                                // Start dragging if window is movable
+                                // Start dragging if window is movable and button is pressed
+                                // Use button_just_pressed for initial drag, but also allow if button held
                                 if ((*window).flags & WINDOW_MOVABLE) != 0 {
-                                    self.dragging_window = Some(window);
-                                    // Calculate offset from window origin
-                                    self.drag_offset_x = mouse_x - wx;
-                                    self.drag_offset_y = mouse_y - wy;
+                                    if self.dragging_window.is_none() {
+                                        self.dragging_window = Some(window);
+                                        // Calculate offset from window origin (where in title bar we clicked)
+                                        self.drag_offset_x = mouse_x - wx;
+                                        self.drag_offset_y = mouse_y - wy;
+                                    }
                                 }
                             }
                             break; // Stop checking other windows (topmost window gets the click)

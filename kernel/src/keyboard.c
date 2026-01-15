@@ -1,4 +1,7 @@
 #include "keyboard.h"
+#include "mouse.h"
+#include "window_manager_rust.h"
+#include <stdbool.h>
 
 // PS/2 keyboard scancode to ASCII mapping (US layout)
 static const char scancode_to_ascii[128] = {
@@ -38,11 +41,18 @@ char read_key(void) {
             // Check if this data is from the auxiliary device (mouse)
             if (status & PS2_STATUS_AUXILIARY) {
                 // This is mouse data, handle it properly instead of discarding
-                extern void mouse_handle_interrupt(void);
                 extern void update_mouse_cursor(void);
                 
                 mouse_handle_interrupt();
                 update_mouse_cursor();
+                
+                // Also update window manager if windows exist
+                if (wm_get_window_count() > 0) {
+                    mouse_state_t *mouse = mouse_get_state();
+                    wm_handle_mouse(mouse->x, mouse->y, mouse->left_button);
+                    wm_update();
+                }
+                
                 continue;   // Keep waiting for keyboard data
             }
             
