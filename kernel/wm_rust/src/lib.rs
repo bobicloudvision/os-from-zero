@@ -1217,11 +1217,20 @@ impl WindowManager {
         // Render all invalidated windows (skip minimized windows)
         // First pass: render invalidated windows
         unsafe {
+            // Track which windows we've already rendered in this update cycle
+            // to prevent infinite loops from re-invalidation
+            let mut rendered_this_cycle: [bool; 32] = [false; 32];
+            
             for i in 0..self.window_count {
                 if let Some(window) = self.windows[i] {
                     // Skip minimized windows
                     if (*window).minimized {
                         log_debug(b"update: skipping minimized window\0");
+                        continue;
+                    }
+                    
+                    // Skip if we already rendered this window in this cycle
+                    if i < 32 && rendered_this_cycle[i] {
                         continue;
                     }
                     
@@ -1281,8 +1290,13 @@ impl WindowManager {
                             }
                         }
                         
+                        // Mark this window as rendered in this cycle
+                        if i < 32 {
+                            rendered_this_cycle[i] = true;
+                        }
+                        
+                        // Clear invalidated flag BEFORE marking dirty to prevent re-render loop
                         (*window).invalidated = false;
-                        ds_mark_dirty((*window).x, (*window).y, (*window).width, (*window).height);
                         
                         // Log successful render, especially for maximized windows
                         if (*window).maximized {
@@ -1292,6 +1306,9 @@ impl WindowManager {
                         } else {
                             log_debug(b"update: window rendered successfully\0");
                         }
+                        
+                        // Mark dirty AFTER clearing invalidated flag
+                        ds_mark_dirty((*window).x, (*window).y, (*window).width, (*window).height);
                     }
                     // Window not invalidated - this is normal after rendering, no action needed
                 }

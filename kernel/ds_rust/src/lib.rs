@@ -581,6 +581,7 @@ impl DisplayServer {
             let x = self.mouse_x;
             let y = self.mouse_y;
             
+            // Clear old cursor position if it moved
             if self.last_cursor_x >= 0 && self.last_cursor_y >= 0 && 
                (self.last_cursor_x != x || self.last_cursor_y != y) {
                 self.clear_cursor_from_backbuffer(self.last_cursor_x, self.last_cursor_y);
@@ -588,8 +589,11 @@ impl DisplayServer {
                               CURSOR_WIDTH as u32 + 2, CURSOR_HEIGHT as u32 + 2);
             }
             
-            if self.last_cursor_x != x || self.last_cursor_y != y || 
-               self.last_cursor_x == -1 || self.last_cursor_y == -1 {
+            // Always render cursor if position is valid
+            // Force render every frame to ensure cursor is always visible
+            if x >= 0 && y >= 0 && 
+               x < self.backbuffer_width as i32 && 
+               y < self.backbuffer_height as i32 {
                 self.save_cursor_background_from_backbuffer(x, y);
                 
                 let backbuffer = self.get_backbuffer();
@@ -751,9 +755,53 @@ impl DisplayServer {
             // Always render cursor last on backbuffer
             self.render_cursor_to_backbuffer();
             
-            // Copy backbuffer to framebuffer (only dirty region)
-            if dirty_rect_copy.valid {
-                self.copy_backbuffer_to_framebuffer(&dirty_rect_copy);
+            // Always include cursor area in dirty rectangle (cursor should always be visible)
+            const CURSOR_WIDTH: u32 = 12;
+            const CURSOR_HEIGHT: u32 = 16;
+            
+            // Always include cursor area in dirty rectangle if mouse position is valid
+            // This ensures the cursor is always visible, even when nothing else changes
+            if self.mouse_x >= 0 && self.mouse_y >= 0 && 
+               self.mouse_x < self.backbuffer_width as i32 && 
+               self.mouse_y < self.backbuffer_height as i32 {
+                let cursor_x = (self.mouse_x - 1).max(0);
+                let cursor_y = (self.mouse_y - 1).max(0);
+                let cursor_w = CURSOR_WIDTH + 2;
+                let cursor_h = CURSOR_HEIGHT + 2;
+                
+                // Always ensure cursor area is included in dirty rectangle
+                if dirty_rect_copy.valid {
+                    // Merge cursor area with existing dirty rectangle
+                    let min_x = dirty_rect_copy.x.min(cursor_x);
+                    let min_y = dirty_rect_copy.y.min(cursor_y);
+                    let max_x = (dirty_rect_copy.x + dirty_rect_copy.width as i32).max(cursor_x + cursor_w as i32);
+                    let max_y = (dirty_rect_copy.y + dirty_rect_copy.height as i32).max(cursor_y + cursor_h as i32);
+                    
+                    self.dirty_rect = DirtyRect {
+                        x: min_x,
+                        y: min_y,
+                        width: (max_x - min_x) as u32,
+                        height: (max_y - min_y) as u32,
+                        valid: true,
+                    };
+                } else {
+                    // If no dirty rect, create one for cursor area to ensure it's always rendered
+                    self.dirty_rect = DirtyRect {
+                        x: cursor_x,
+                        y: cursor_y,
+                        width: cursor_w,
+                        height: cursor_h,
+                        valid: true,
+                    };
+                }
+            } else {
+                // Mouse position not valid, use existing dirty rect
+                self.dirty_rect = dirty_rect_copy;
+            }
+            
+            // Copy backbuffer to framebuffer (always include cursor area if valid)
+            if self.dirty_rect.valid {
+                self.copy_backbuffer_to_framebuffer(&self.dirty_rect);
             }
             
             // Clear dirty rectangle after rendering
@@ -763,18 +811,24 @@ impl DisplayServer {
 
     fn update_cursor_position(&mut self, x: i32, y: i32) {
         let cursor_moved = self.mouse_x != x || self.mouse_y != y;
+        
+        // Mark old cursor position as dirty before updating
+        if cursor_moved && self.last_cursor_x >= 0 && self.last_cursor_y >= 0 {
+            const CURSOR_WIDTH: usize = 12;
+            const CURSOR_HEIGHT: usize = 16;
+            self.mark_dirty(self.last_cursor_x - 1, self.last_cursor_y - 1, 
+                          CURSOR_WIDTH as u32 + 2, CURSOR_HEIGHT as u32 + 2);
+        }
+        
+        // Update cursor position
         self.mouse_x = x;
         self.mouse_y = y;
         
-        if cursor_moved {
-            const CURSOR_WIDTH: usize = 12;
-            const CURSOR_HEIGHT: usize = 16;
-            if self.last_cursor_x >= 0 && self.last_cursor_y >= 0 {
-                self.mark_dirty(self.last_cursor_x - 1, self.last_cursor_y - 1, 
-                              CURSOR_WIDTH as u32 + 2, CURSOR_HEIGHT as u32 + 2);
-            }
-            self.mark_dirty(x - 1, y - 1, CURSOR_WIDTH as u32 + 2, CURSOR_HEIGHT as u32 + 2);
-        }
+        // Always mark new cursor position as dirty to ensure it's rendered
+        // This ensures the cursor is visible even on first render
+        const CURSOR_WIDTH: usize = 12;
+        const CURSOR_HEIGHT: usize = 16;
+        self.mark_dirty(x - 1, y - 1, CURSOR_WIDTH as u32 + 2, CURSOR_HEIGHT as u32 + 2);
     }
 }
 
