@@ -78,7 +78,7 @@ impl WindowManager {
             dragging_window: None,
             drag_offset_x: 0,
             drag_offset_y: 0,
-            desktop_color: 0x1a1a2e, // Dark blue desktop
+            desktop_color: 0x0d1117, // Match terminal background (dark gray)
         }
     }
 
@@ -135,15 +135,21 @@ impl WindowManager {
             }
             new_window.title[i] = 0;
             
-            // Allocate window buffer
+            // Allocate window buffer - each window gets its own buffer
             let buffer_size = (width * height) as usize;
-            static mut BUFFER_POOL: [u32; 1024 * 768] = [0; 1024 * 768];
-            if buffer_size <= BUFFER_POOL.len() {
-                new_window.buffer = BUFFER_POOL.as_mut_ptr();
+            // Use a larger buffer pool and allocate per-window
+            static mut BUFFER_POOL: [[u32; 1024 * 768]; 32] = [[0; 1024 * 768]; 32];
+            if buffer_size <= BUFFER_POOL[slot].len() {
+                new_window.buffer = BUFFER_POOL[slot].as_mut_ptr();
             }
             
             WINDOW_POOL[slot] = Some(new_window);
-            WINDOW_POOL[slot].as_mut().unwrap() as *mut Window
+            let window_ptr = WINDOW_POOL[slot].as_mut().unwrap() as *mut Window;
+            
+            // Force initial render
+            (*window_ptr).invalidated = true;
+            
+            window_ptr
         };
 
         self.windows[self.window_count] = Some(window);
@@ -345,7 +351,13 @@ impl WindowManager {
                 return;
             }
             
-            // Draw desktop background
+            // Only render desktop and windows if we have windows
+            // Otherwise, let the terminal handle the display
+            if self.window_count == 0 {
+                return;
+            }
+            
+            // Draw desktop background only when we have windows
             let fb_ptr = (*fb).address;
             let pitch = (*fb).pitch as usize / 4;
             let width = (*fb).width as usize;
@@ -671,6 +683,17 @@ pub extern "C" fn wm_update() {
     unsafe {
         if let Some(ref mut wm) = WM_STATE {
             wm.update();
+        }
+    }
+}
+
+#[no_mangle]
+pub extern "C" fn wm_get_window_count() -> c_int {
+    unsafe {
+        if let Some(ref wm) = WM_STATE {
+            wm.window_count as c_int
+        } else {
+            0
         }
     }
 }

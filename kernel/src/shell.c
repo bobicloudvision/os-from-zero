@@ -4,6 +4,7 @@
 #include "commands/audio.h"
 #include "commands/game.h"
 #include "commands/execution.h"
+#include "commands/window_example.h"
 #include "terminal.h"
 #include "keyboard.h"
 #include "mouse.h"
@@ -31,9 +32,12 @@ static void check_mouse_events(void) {
         }
     }
     
-    // Update window manager
+    // Update window manager (only if windows exist)
     extern void wm_update(void);
-    wm_update();
+    extern int wm_get_window_count(void);
+    if (wm_get_window_count() > 0) {
+        wm_update();
+    }
 }
 
 // Command registry
@@ -127,6 +131,9 @@ void shell_init(void) {
     
     // Register execution commands
     register_execution_commands();
+    
+    // Register window example commands
+    register_window_example_commands();
 }
 
 // Shell main loop
@@ -138,7 +145,8 @@ void shell_loop(void) {
     terminal_print("Try the 'mouse' command to check position!\n");
     terminal_print("Try 'beep', 'play', or 'audiotest' for audio!\n");
     terminal_print("🎮 NEW: Play games with 'guess', 'tictactoe', or 'rps'!\n");
-    terminal_print("💻 NEW: Program Execution! Try 'compile hello.elf' then 'exec hello.elf'!\n\n");
+    terminal_print("💻 NEW: Program Execution! Try 'compile hello.elf' then 'exec hello.elf'!\n");
+    terminal_print("🪟 NEW: Desktop Environment! Try 'windows' to see window examples!\n\n");
     
     // Play startup sound
     audio_play_event(AUDIO_STARTUP_SOUND);

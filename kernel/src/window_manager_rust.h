@@ -39,5 +39,6 @@ void wm_draw_rect_to_window(window_t *window, int x, int y, uint32_t width, uint
 void wm_draw_text_to_window(window_t *window, const char *text, int x, int y, uint32_t color);
 void wm_handle_mouse(int mouse_x, int mouse_y, bool left_button);
 void wm_update(void);
+int wm_get_window_count(void);
 
 #endif // WINDOW_MANAGER_RUST_H
