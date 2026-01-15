@@ -83,8 +83,7 @@ void cmd_ram_widget(const char *args) {
         // Play creation sound
         audio_play_event(AUDIO_SYSTEM_BEEP);
         
-        // Refresh display
-        wm_draw_all();
+        // Note: Window manager removed - widgets will not function
     } else {
         terminal_print("Failed to create RAM widget: Out of memory or too many widgets\n");
         audio_play_event(AUDIO_ERROR_BEEP);
@@ -128,8 +127,7 @@ void cmd_cpu_widget(const char *args) {
         // Play creation sound
         audio_play_event(AUDIO_SYSTEM_BEEP);
         
-        // Refresh display
-        wm_draw_all();
+        // Note: Window manager removed - widgets will not function
     } else {
         terminal_print("Failed to create CPU widget: Out of memory or too many widgets\n");
         audio_play_event(AUDIO_ERROR_BEEP);
@@ -174,8 +172,7 @@ void cmd_system_widget(const char *args) {
         // Play creation sound
         audio_play_event(AUDIO_SYSTEM_BEEP);
         
-        // Refresh display
-        wm_draw_all();
+        // Note: Window manager removed - widgets will not function
     } else {
         terminal_print("Failed to create system info widget: Out of memory or too many widgets\n");
         audio_play_event(AUDIO_ERROR_BEEP);
@@ -263,8 +260,7 @@ void cmd_widget_close(const char *args) {
         terminal_print(count_str);
         terminal_print(" widget(s)\n");
         
-        // Refresh display
-        wm_draw_all();
+        // Note: Window manager removed - widgets will not function
     } else {
         terminal_print("No widgets to close\n");
     }
@@ -465,8 +461,7 @@ void cmd_live_demo(const char *args) {
     // Play demo sound
     audio_play_event(AUDIO_STARTUP_SOUND);
     
-    // Refresh display
-    wm_draw_all();
+    // Note: Window manager removed - widgets will not function
 }
 
 // Register all widget commands

@@ -3,8 +3,10 @@
 
 #include <stdint.h>
 #include <stdbool.h>
-#include "../window_manager.h"
 #include "../system_monitor.h"
+
+// Forward declaration - window manager removed
+typedef struct window window_t;
 
 // Widget types
 typedef enum {
