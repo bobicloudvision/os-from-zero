@@ -5,6 +5,7 @@
 #include "commands/game.h"
 #include "commands/execution.h"
 #include "commands/window_example.h"
+#include "commands/gpu.h"
 #include "terminal.h"
 #include "keyboard.h"
 #include "mouse.h"
@@ -132,6 +133,9 @@ void shell_init(void) {
     
     // Register window example commands
     register_window_example_commands();
+    
+    // Register GPU commands
+    register_gpu_commands();
 }
 
 // Shell main loop
