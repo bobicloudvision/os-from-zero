@@ -65,7 +65,9 @@ char read_key(void) {
             // No input available - periodically update window manager
             // This allows animating windows to update independently
             update_counter++;
-            if (update_counter >= 10000) {  // Update every ~10000 iterations
+            // Update more frequently to keep animations smooth (~60 FPS target)
+            // At high CPU speeds, 1000 iterations happens very quickly
+            if (update_counter >= 1000) {  // Update every ~1000 iterations for smoother animation
                 update_counter = 0;
                 extern void wm_update(void);
                 wm_update();

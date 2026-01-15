@@ -513,6 +513,14 @@ impl WindowManager {
                         // Call custom draw callback if set
                         if let Some(callback) = (*window).draw_callback {
                             callback(window);
+                            // Check if callback re-invalidated the window (for continuous animations)
+                            // If so, preserve the invalidation so it gets redrawn on next update
+                            if (*window).invalidated {
+                                // Window was re-invalidated by callback - keep it invalidated
+                                // This allows continuous animations to work
+                                ds_mark_dirty((*window).x, (*window).y, (*window).width, (*window).height);
+                                continue; // Skip clearing invalidated flag
+                            }
                         }
                         
                         (*window).invalidated = false;

@@ -169,6 +169,16 @@ void shell_loop(void) {
             // Check for mouse events during input
             check_mouse_events();
             
+            // Periodically update window manager for continuous animations
+            // This ensures animating windows update even when waiting for input
+            static uint32_t update_counter = 0;
+            update_counter++;
+            if (update_counter >= 500) {  // Update every ~500 iterations
+                update_counter = 0;
+                extern void wm_update(void);
+                wm_update();
+            }
+            
             char c = read_key();
             
             if (c == '\n') {
