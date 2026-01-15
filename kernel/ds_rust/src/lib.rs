@@ -319,6 +319,27 @@ impl DisplayServer {
         self.sort_surfaces_by_z_order();
     }
 
+    fn set_surface_size(&mut self, surface: *mut Surface, width: u32, height: u32) {
+        unsafe {
+            let old_x = (*surface).x;
+            let old_y = (*surface).y;
+            let old_width = (*surface).width;
+            let old_height = (*surface).height;
+            
+            let buffer_size = (width * height) as usize;
+            if buffer_size > MAX_BUFFER_SIZE {
+                return; // New size too large
+            }
+            
+            (*surface).width = width;
+            (*surface).height = height;
+            
+            // Mark old and new areas as dirty
+            self.mark_dirty(old_x, old_y, old_width, old_height);
+            self.mark_dirty(old_x, old_y, width, height);
+        }
+    }
+
     fn sort_surfaces_by_z_order(&mut self) {
         // Simple bubble sort by z_order
         for i in 0..self.surface_count {
@@ -800,6 +821,15 @@ pub extern "C" fn ds_set_surface_z_order(surface: *mut Surface, z_order: c_int) 
     unsafe {
         if let Some(ref mut ds) = DS_STATE {
             ds.set_surface_z_order(surface, z_order);
+        }
+    }
+}
+
+#[no_mangle]
+pub extern "C" fn ds_set_surface_size(surface: *mut Surface, width: u32, height: u32) {
+    unsafe {
+        if let Some(ref mut ds) = DS_STATE {
+            ds.set_surface_size(surface, width, height);
         }
     }
 }

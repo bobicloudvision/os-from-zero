@@ -10,6 +10,46 @@ fn panic(_info: &core::panic::PanicInfo) -> ! {
 use core::ptr;
 use core::ffi::{c_char, c_int, c_void};
 
+// Helper function for logging (simplified - just pass static strings)
+#[inline(always)]
+unsafe fn log_debug(msg: &[u8]) {
+    let mut buf = [0u8; 256];
+    let mut i = 0;
+    for &b in msg.iter().take(255) {
+        buf[i] = b;
+        i += 1;
+        if b == 0 { break; }
+    }
+    if i < 255 { buf[i] = 0; }
+    logger_rust_log(0, b"WM\0".as_ptr() as *const c_char, buf.as_ptr() as *const c_char);
+}
+
+#[inline(always)]
+unsafe fn log_info(msg: &[u8]) {
+    let mut buf = [0u8; 256];
+    let mut i = 0;
+    for &b in msg.iter().take(255) {
+        buf[i] = b;
+        i += 1;
+        if b == 0 { break; }
+    }
+    if i < 255 { buf[i] = 0; }
+    logger_rust_log(1, b"WM\0".as_ptr() as *const c_char, buf.as_ptr() as *const c_char);
+}
+
+#[inline(always)]
+unsafe fn log_error(msg: &[u8]) {
+    let mut buf = [0u8; 256];
+    let mut i = 0;
+    for &b in msg.iter().take(255) {
+        buf[i] = b;
+        i += 1;
+        if b == 0 { break; }
+    }
+    if i < 255 { buf[i] = 0; }
+    logger_rust_log(3, b"WM\0".as_ptr() as *const c_char, buf.as_ptr() as *const c_char);
+}
+
 // Surface structure (must match display server definition)
 #[repr(C)]
 pub struct Surface {
@@ -28,10 +68,17 @@ extern "C" {
     fn ds_destroy_surface(surface: *mut Surface);
     fn ds_set_surface_position(surface: *mut Surface, x: c_int, y: c_int);
     fn ds_set_surface_z_order(surface: *mut Surface, z_order: c_int);
+    fn ds_set_surface_size(surface: *mut Surface, width: u32, height: u32);
     fn ds_get_surface_buffer(surface: *mut Surface) -> *mut u32;
     fn ds_mark_dirty(x: c_int, y: c_int, width: u32, height: u32);
     fn ds_update_cursor_position(x: c_int, y: c_int);
     fn ds_render();
+}
+
+// External logger functions
+extern "C" {
+    fn logger_rust_log(level: u32, module: *const c_char, message: *const c_char);
+    fn logger_rust_log_fmt(level: u32, module: *const c_char, format: *const c_char, ...);
 }
 
 // Limine framebuffer structure (must match C struct)
@@ -78,6 +125,12 @@ pub struct Window {
     pub buffer: *mut u32,  // Window content buffer (points to display server surface buffer)
     pub surface: *mut Surface, // Display server surface handle
     pub z_order: i32,      // Z-order for compositing
+    pub minimized: bool,   // Whether window is minimized
+    pub maximized: bool,   // Whether window is maximized
+    pub orig_x: i32,       // Original x position before maximize
+    pub orig_y: i32,       // Original y position before maximize
+    pub orig_width: u32,   // Original width before maximize/resize
+    pub orig_height: u32,  // Original height before maximize/resize
 }
 
 // Window manager state
@@ -85,6 +138,20 @@ static mut WM_STATE: Option<WindowManager> = None;
 
 // Window pool for static allocation
 static mut WINDOW_POOL: [Option<Window>; 32] = [const { None }; 32];
+
+// Resize edge types
+#[derive(Clone, Copy, PartialEq)]
+enum ResizeEdge {
+    None,
+    Top,
+    Bottom,
+    Left,
+    Right,
+    TopLeft,
+    TopRight,
+    BottomLeft,
+    BottomRight,
+}
 
 struct WindowManager {
     framebuffer: *mut LimineFramebuffer,
@@ -94,8 +161,15 @@ struct WindowManager {
     dragging_window: Option<*mut Window>,
     drag_offset_x: i32,
     drag_offset_y: i32,
+    resizing_window: Option<*mut Window>,
+    resize_edge: ResizeEdge,
+    resize_start_x: i32,
+    resize_start_y: i32,
+    resize_start_width: u32,
+    resize_start_height: u32,
     last_mouse_button: bool,
     next_z_order: i32,  // Next z-order value to assign
+    min_z_order: i32,   // Minimum z-order for minimized windows
 }
 
 impl WindowManager {
@@ -108,8 +182,15 @@ impl WindowManager {
             dragging_window: None,
             drag_offset_x: 0,
             drag_offset_y: 0,
+            resizing_window: None,
+            resize_edge: ResizeEdge::None,
+            resize_start_x: 0,
+            resize_start_y: 0,
+            resize_start_width: 0,
+            resize_start_height: 0,
             last_mouse_button: false,
             next_z_order: 0,
+            min_z_order: -1000, // Z-order for minimized windows
         }
     }
 
@@ -201,6 +282,12 @@ impl WindowManager {
                 buffer: buffer,
                 surface: surface,
                 z_order: z_order,
+                minimized: false,
+                maximized: false,
+                orig_x: x,
+                orig_y: y,
+                orig_width: width,
+                orig_height: height,
             };
             
             // Copy title
@@ -280,6 +367,353 @@ impl WindowManager {
         }
     }
 
+    fn minimize_window(&mut self, window: *mut Window) {
+        unsafe {
+            if (*window).minimized {
+                return; // Already minimized
+            }
+            
+            (*window).minimized = true;
+            (*window).z_order = self.min_z_order;
+            self.min_z_order -= 1;
+            ds_set_surface_z_order((*window).surface, (*window).z_order);
+            
+            // Mark old position as dirty
+            ds_mark_dirty((*window).x, (*window).y, (*window).width, (*window).height);
+            
+            // If this was the focused window, clear focus
+            if self.focused_window == Some(window) {
+                (*window).focused = false;
+                self.focused_window = None;
+            }
+        }
+    }
+
+    fn restore_window(&mut self, window: *mut Window) {
+        unsafe {
+            if !(*window).minimized {
+                return; // Not minimized
+            }
+            
+            (*window).minimized = false;
+            (*window).z_order = self.next_z_order;
+            self.next_z_order += 1;
+            ds_set_surface_z_order((*window).surface, (*window).z_order);
+            
+            // Mark position as dirty
+            ds_mark_dirty((*window).x, (*window).y, (*window).width, (*window).height);
+            
+            // Focus and bring to front
+            if let Some(old_focused) = self.focused_window {
+                (*old_focused).focused = false;
+                (*old_focused).invalidated = true;
+                ds_mark_dirty((*old_focused).x, (*old_focused).y, 
+                              (*old_focused).width, (*old_focused).height);
+            }
+            self.focused_window = Some(window);
+            (*window).focused = true;
+            (*window).invalidated = true;
+            self.bring_to_front(window);
+        }
+    }
+
+    fn maximize_window(&mut self, window: *mut Window) {
+        unsafe {
+            log_debug(b"maximize_window: called\0");
+            
+            if (*window).maximized {
+                log_info(b"maximize_window: already maximized\0");
+                return; // Already maximized
+            }
+            
+            // Save original dimensions
+            (*window).orig_x = (*window).x;
+            (*window).orig_y = (*window).y;
+            (*window).orig_width = (*window).width;
+            (*window).orig_height = (*window).height;
+            
+            // Get framebuffer dimensions
+            let fb = self.get_framebuffer();
+            let fb_width = (*fb).width as u32;
+            let fb_height = (*fb).height as u32;
+            
+            logger_rust_log_fmt(0, b"WM\0".as_ptr() as *const c_char, 
+                b"fb_size=%ux%u, orig=%ux%u\0".as_ptr() as *const c_char,
+                fb_width, fb_height, (*window).width, (*window).height);
+            
+            // Check buffer size limit (800x600 = 480000 pixels max)
+            const MAX_BUFFER_SIZE: usize = 800 * 600;
+            const MAX_WIDTH: u32 = 800;
+            const MAX_HEIGHT: u32 = 600;
+            
+            // Calculate maximize size, limiting to buffer size
+            let mut new_width = fb_width;
+            let mut new_height = fb_height;
+            
+            // If framebuffer is larger than buffer limit, scale down proportionally using integer math
+            if (new_width * new_height) as usize > MAX_BUFFER_SIZE {
+                // Calculate aspect ratio using integer math (multiply by 1000 for precision)
+                let aspect_num = fb_width as u64 * 1000;
+                let aspect_den = fb_height as u64;
+                
+                // Try to fit within buffer size while maintaining aspect
+                if fb_width > fb_height {
+                    // Landscape - limit by width first
+                    new_width = MAX_WIDTH;
+                    new_height = ((MAX_WIDTH as u64 * aspect_den) / aspect_num) as u32;
+                    if (new_width * new_height) as usize > MAX_BUFFER_SIZE {
+                        // Still too large, limit by height
+                        new_height = MAX_HEIGHT;
+                        new_width = ((MAX_HEIGHT as u64 * aspect_num) / aspect_den) as u32;
+                        // Final safety check
+                        if (new_width * new_height) as usize > MAX_BUFFER_SIZE {
+                            // Fallback to a safe size
+                            new_width = MAX_WIDTH.min(fb_width);
+                            new_height = MAX_HEIGHT.min(fb_height);
+                        }
+                    }
+                } else {
+                    // Portrait or square - limit by height first
+                    new_height = MAX_HEIGHT;
+                    new_width = ((MAX_HEIGHT as u64 * aspect_num) / aspect_den) as u32;
+                    if (new_width * new_height) as usize > MAX_BUFFER_SIZE {
+                        // Still too large, limit by width
+                        new_width = MAX_WIDTH;
+                        new_height = ((MAX_WIDTH as u64 * aspect_den) / aspect_num) as u32;
+                        // Final safety check
+                        if (new_width * new_height) as usize > MAX_BUFFER_SIZE {
+                            // Fallback to a safe size
+                            new_width = MAX_WIDTH.min(fb_width);
+                            new_height = MAX_HEIGHT.min(fb_height);
+                        }
+                    }
+                }
+            }
+            
+            // Final safety check - ensure we never exceed buffer size
+            if (new_width * new_height) as usize > MAX_BUFFER_SIZE {
+                // Use maximum safe dimensions
+                new_width = MAX_WIDTH;
+                new_height = MAX_HEIGHT;
+            }
+            
+            logger_rust_log_fmt(0, b"WM\0".as_ptr() as *const c_char,
+                b"new_size=%ux%u, buffer_size=%u\0".as_ptr() as *const c_char,
+                new_width, new_height, (new_width * new_height) as u32);
+            
+            // Mark old position as dirty
+            ds_mark_dirty((*window).x, (*window).y, (*window).width, (*window).height);
+            
+            // Maximize (centered if limited by buffer size)
+            if new_width == fb_width && new_height == fb_height {
+                (*window).x = 0;
+                (*window).y = 0;
+            } else {
+                // Center the window if we had to limit the size
+                (*window).x = ((fb_width as i32 - new_width as i32) / 2).max(0);
+                (*window).y = ((fb_height as i32 - new_height as i32) / 2).max(0);
+            }
+            
+            // Double-check buffer size before updating
+            let buffer_size = (new_width * new_height) as usize;
+            if buffer_size > MAX_BUFFER_SIZE {
+                // Shouldn't happen due to our check above, but be safe
+                return;
+            }
+            
+            // Ensure window is not minimized
+            if (*window).minimized {
+                self.restore_window(window);
+            }
+            
+            // Update window dimensions first
+            (*window).width = new_width;
+            (*window).height = new_height;
+            (*window).maximized = true;
+            (*window).invalidated = true;  // Mark as invalidated immediately when dimensions change
+            
+            // Update surface position first (before size change)
+            logger_rust_log_fmt(0, b"WM\0".as_ptr() as *const c_char,
+                b"setting position to %d,%d\0".as_ptr() as *const c_char,
+                (*window).x, (*window).y);
+            ds_set_surface_position((*window).surface, (*window).x, (*window).y);
+            
+            // Then update surface size
+            logger_rust_log_fmt(0, b"WM\0".as_ptr() as *const c_char,
+                b"setting size to %ux%u\0".as_ptr() as *const c_char,
+                (*window).width, (*window).height);
+            ds_set_surface_size((*window).surface, (*window).width, (*window).height);
+            
+            // Update buffer pointer (shouldn't change, but be safe)
+            (*window).buffer = ds_get_surface_buffer((*window).surface);
+            
+            logger_rust_log_fmt(0, b"WM\0".as_ptr() as *const c_char,
+                b"buffer=%p, surface=%p\0".as_ptr() as *const c_char,
+                (*window).buffer, (*window).surface);
+            
+            // Verify surface dimensions match window dimensions
+            if !(*window).surface.is_null() {
+                let surf_width = (*(*window).surface).width;
+                let surf_height = (*(*window).surface).height;
+                let surf_x = (*(*window).surface).x;
+                let surf_y = (*(*window).surface).y;
+                logger_rust_log_fmt(0, b"WM\0".as_ptr() as *const c_char,
+                    b"surface: pos=%d,%d size=%ux%u, window: pos=%d,%d size=%ux%u\0".as_ptr() as *const c_char,
+                    surf_x, surf_y, surf_width, surf_height, (*window).x, (*window).y, (*window).width, (*window).height);
+                
+                if surf_width != (*window).width || surf_height != (*window).height {
+                    log_error(b"ERROR - surface size mismatch! Restoring original size.\0");
+                    // Restore original dimensions
+                    (*window).x = (*window).orig_x;
+                    (*window).y = (*window).orig_y;
+                    (*window).width = (*window).orig_width;
+                    (*window).height = (*window).orig_height;
+                    (*window).maximized = false;
+                    ds_set_surface_size((*window).surface, (*window).width, (*window).height);
+                    ds_set_surface_position((*window).surface, (*window).x, (*window).y);
+                    (*window).buffer = ds_get_surface_buffer((*window).surface);
+                    (*window).invalidated = true;
+                    return;
+                }
+                
+                if surf_x != (*window).x || surf_y != (*window).y {
+                    log_error(b"ERROR - surface position mismatch!\0");
+                }
+            }
+            
+            // Verify buffer is still valid
+            if (*window).buffer.is_null() {
+                log_error(b"ERROR - buffer is null after resize!\0");
+                // Resize failed, restore original dimensions
+                (*window).x = (*window).orig_x;
+                (*window).y = (*window).orig_y;
+                (*window).width = (*window).orig_width;
+                (*window).height = (*window).orig_height;
+                (*window).maximized = false;
+                ds_set_surface_size((*window).surface, (*window).width, (*window).height);
+                ds_set_surface_position((*window).surface, (*window).x, (*window).y);
+                (*window).buffer = ds_get_surface_buffer((*window).surface);
+                return;
+            }
+            
+            // Bring window to front and ensure it's focused
+            self.bring_to_front(window);
+            if let Some(old_focused) = self.focused_window {
+                if old_focused != window {
+                    unsafe {
+                        (*old_focused).focused = false;
+                        (*old_focused).invalidated = true;
+                        ds_mark_dirty((*old_focused).x, (*old_focused).y, 
+                                      (*old_focused).width, (*old_focused).height);
+                    }
+                }
+            }
+            self.focused_window = Some(window);
+            unsafe {
+                (*window).focused = true;
+                (*window).invalidated = true;
+                (*window).minimized = false;  // Ensure not minimized
+                
+                // Log window state before update
+                logger_rust_log_fmt(0, b"WM\0".as_ptr() as *const c_char,
+                    b"maximize_window: before update - invalidated=%u, pos=%d,%d, size=%ux%u, buffer=%p\0".as_ptr() as *const c_char,
+                    if (*window).invalidated { 1 } else { 0 }, (*window).x, (*window).y, (*window).width, (*window).height, (*window).buffer);
+                
+                ds_mark_dirty((*window).x, (*window).y, (*window).width, (*window).height);
+            }
+            
+            // Force immediate render to clear artifacts
+            log_debug(b"maximize_window: completed successfully, invalidated=true\0");
+            
+            // Don't call self.update() here - it would clear the invalidated flag
+            // The main loop will call update() and render the window
+            // Just ensure the display server knows about the changes
+            unsafe {
+                ds_render();
+            }
+            
+            // Double-check that invalidated is still true
+            unsafe {
+                if !(*window).invalidated {
+                    log_error(b"maximize_window: ERROR - invalidated flag was cleared!\0");
+                    (*window).invalidated = true;
+                }
+            }
+        }
+    }
+
+    fn unmaximize_window(&mut self, window: *mut Window) {
+        unsafe {
+            if !(*window).maximized {
+                return; // Not maximized
+            }
+            
+            // Mark old position as dirty
+            ds_mark_dirty((*window).x, (*window).y, (*window).width, (*window).height);
+            
+            // Restore original dimensions
+            (*window).x = (*window).orig_x;
+            (*window).y = (*window).orig_y;
+            (*window).width = (*window).orig_width;
+            (*window).height = (*window).orig_height;
+            (*window).maximized = false;
+            
+            // Update surface size and position
+            ds_set_surface_size((*window).surface, (*window).width, (*window).height);
+            ds_set_surface_position((*window).surface, (*window).x, (*window).y);
+            
+            // Update buffer pointer
+            (*window).buffer = ds_get_surface_buffer((*window).surface);
+            
+            (*window).invalidated = true;
+            ds_mark_dirty((*window).x, (*window).y, (*window).width, (*window).height);
+        }
+    }
+
+    fn get_resize_edge(&self, window: *mut Window, mouse_x: i32, mouse_y: i32) -> ResizeEdge {
+        unsafe {
+            if ((*window).flags & WINDOW_RESIZABLE) == 0 {
+                return ResizeEdge::None;
+            }
+            
+            if (*window).maximized {
+                return ResizeEdge::None; // Can't resize maximized windows
+            }
+            
+            let wx = (*window).x;
+            let wy = (*window).y;
+            let ww = (*window).width as i32;
+            let wh = (*window).height as i32;
+            
+            const RESIZE_BORDER: i32 = 8;
+            
+            let rel_x = mouse_x - wx;
+            let rel_y = mouse_y - wy;
+            
+            let on_left = rel_x < RESIZE_BORDER;
+            let on_right = rel_x >= ww - RESIZE_BORDER;
+            let on_top = rel_y < RESIZE_BORDER;
+            let on_bottom = rel_y >= wh - RESIZE_BORDER;
+            
+            // Don't resize if in title bar (top 20 pixels)
+            if rel_y < 20 {
+                return ResizeEdge::None;
+            }
+            
+            match (on_top, on_bottom, on_left, on_right) {
+                (true, false, true, false) => ResizeEdge::TopLeft,
+                (true, false, false, true) => ResizeEdge::TopRight,
+                (false, true, true, false) => ResizeEdge::BottomLeft,
+                (false, true, false, true) => ResizeEdge::BottomRight,
+                (true, false, false, false) => ResizeEdge::Top,
+                (false, true, false, false) => ResizeEdge::Bottom,
+                (false, false, true, false) => ResizeEdge::Left,
+                (false, false, false, true) => ResizeEdge::Right,
+                _ => ResizeEdge::None,
+            }
+        }
+    }
+
     fn clear_window(&mut self, window: *mut Window, color: u32) {
         unsafe {
             if (*window).buffer.is_null() {
@@ -287,7 +721,14 @@ impl WindowManager {
             }
             
             let buffer = (*window).buffer;
-            let size = ((*window).width * (*window).height) as usize;
+            // Safety: Limit to MAX_BUFFER_SIZE to prevent overflow
+            const MAX_BUFFER_SIZE: usize = 800 * 600;
+            let requested_size = ((*window).width * (*window).height) as usize;
+            let size = if requested_size > MAX_BUFFER_SIZE {
+                MAX_BUFFER_SIZE
+            } else {
+                requested_size
+            };
             for i in 0..size {
                 *buffer.add(i) = color;
             }
@@ -376,6 +817,183 @@ impl WindowManager {
         let button_just_pressed = left_button && !self.last_mouse_button;
         self.last_mouse_button = left_button;
         
+        // Check if we're resizing - continue resizing while button is held
+        if let Some(resizing) = self.resizing_window {
+            if left_button {
+                unsafe {
+                    let fb = self.get_framebuffer();
+                    let fb_width = (*fb).width as i32;
+                    let fb_height = (*fb).height as i32;
+                    
+                    let mut new_x = (*resizing).x;
+                    let mut new_y = (*resizing).y;
+                    let mut new_width = self.resize_start_width;
+                    let mut new_height = self.resize_start_height;
+                    
+                    let delta_x = mouse_x - self.resize_start_x;
+                    let delta_y = mouse_y - self.resize_start_y;
+                    
+                    const MIN_WIDTH: u32 = 100;
+                    const MIN_HEIGHT: u32 = 100;
+                    
+                    match self.resize_edge {
+                        ResizeEdge::Right => {
+                            new_width = (self.resize_start_width as i32 + delta_x) as u32;
+                            if new_width < MIN_WIDTH { new_width = MIN_WIDTH; }
+                            if new_x + new_width as i32 > fb_width {
+                                new_width = (fb_width - new_x) as u32;
+                            }
+                        },
+                        ResizeEdge::Left => {
+                            let new_left = self.resize_start_x + delta_x;
+                            if new_left < 0 {
+                                new_width = (self.resize_start_width as i32 - new_left) as u32;
+                                new_x = 0;
+                            } else {
+                                new_width = (self.resize_start_width as i32 - delta_x) as u32;
+                                new_x = new_left;
+                            }
+                            if new_width < MIN_WIDTH {
+                                new_width = MIN_WIDTH;
+                                new_x = (*resizing).x + (*resizing).width as i32 - MIN_WIDTH as i32;
+                            }
+                        },
+                        ResizeEdge::Bottom => {
+                            new_height = (self.resize_start_height as i32 + delta_y) as u32;
+                            if new_height < MIN_HEIGHT { new_height = MIN_HEIGHT; }
+                            if new_y + new_height as i32 > fb_height {
+                                new_height = (fb_height - new_y) as u32;
+                            }
+                        },
+                        ResizeEdge::Top => {
+                            let new_top = self.resize_start_y + delta_y;
+                            if new_top < 0 {
+                                new_height = (self.resize_start_height as i32 - new_top) as u32;
+                                new_y = 0;
+                            } else {
+                                new_height = (self.resize_start_height as i32 - delta_y) as u32;
+                                new_y = new_top;
+                            }
+                            if new_height < MIN_HEIGHT {
+                                new_height = MIN_HEIGHT;
+                                new_y = (*resizing).y + (*resizing).height as i32 - MIN_HEIGHT as i32;
+                            }
+                        },
+                        ResizeEdge::BottomRight => {
+                            new_width = (self.resize_start_width as i32 + delta_x) as u32;
+                            new_height = (self.resize_start_height as i32 + delta_y) as u32;
+                            if new_width < MIN_WIDTH { new_width = MIN_WIDTH; }
+                            if new_height < MIN_HEIGHT { new_height = MIN_HEIGHT; }
+                            if new_x + new_width as i32 > fb_width {
+                                new_width = (fb_width - new_x) as u32;
+                            }
+                            if new_y + new_height as i32 > fb_height {
+                                new_height = (fb_height - new_y) as u32;
+                            }
+                        },
+                        ResizeEdge::BottomLeft => {
+                            let new_left = self.resize_start_x + delta_x;
+                            if new_left < 0 {
+                                new_width = (self.resize_start_width as i32 - new_left) as u32;
+                                new_x = 0;
+                            } else {
+                                new_width = (self.resize_start_width as i32 - delta_x) as u32;
+                                new_x = new_left;
+                            }
+                            new_height = (self.resize_start_height as i32 + delta_y) as u32;
+                            if new_width < MIN_WIDTH {
+                                new_width = MIN_WIDTH;
+                                new_x = (*resizing).x + (*resizing).width as i32 - MIN_WIDTH as i32;
+                            }
+                            if new_height < MIN_HEIGHT { new_height = MIN_HEIGHT; }
+                            if new_y + new_height as i32 > fb_height {
+                                new_height = (fb_height - new_y) as u32;
+                            }
+                        },
+                        ResizeEdge::TopRight => {
+                            new_width = (self.resize_start_width as i32 + delta_x) as u32;
+                            let new_top = self.resize_start_y + delta_y;
+                            if new_top < 0 {
+                                new_height = (self.resize_start_height as i32 - new_top) as u32;
+                                new_y = 0;
+                            } else {
+                                new_height = (self.resize_start_height as i32 - delta_y) as u32;
+                                new_y = new_top;
+                            }
+                            if new_width < MIN_WIDTH { new_width = MIN_WIDTH; }
+                            if new_height < MIN_HEIGHT {
+                                new_height = MIN_HEIGHT;
+                                new_y = (*resizing).y + (*resizing).height as i32 - MIN_HEIGHT as i32;
+                            }
+                            if new_x + new_width as i32 > fb_width {
+                                new_width = (fb_width - new_x) as u32;
+                            }
+                        },
+                        ResizeEdge::TopLeft => {
+                            let new_left = self.resize_start_x + delta_x;
+                            let new_top = self.resize_start_y + delta_y;
+                            if new_left < 0 {
+                                new_width = (self.resize_start_width as i32 - new_left) as u32;
+                                new_x = 0;
+                            } else {
+                                new_width = (self.resize_start_width as i32 - delta_x) as u32;
+                                new_x = new_left;
+                            }
+                            if new_top < 0 {
+                                new_height = (self.resize_start_height as i32 - new_top) as u32;
+                                new_y = 0;
+                            } else {
+                                new_height = (self.resize_start_height as i32 - delta_y) as u32;
+                                new_y = new_top;
+                            }
+                            if new_width < MIN_WIDTH {
+                                new_width = MIN_WIDTH;
+                                new_x = (*resizing).x + (*resizing).width as i32 - MIN_WIDTH as i32;
+                            }
+                            if new_height < MIN_HEIGHT {
+                                new_height = MIN_HEIGHT;
+                                new_y = (*resizing).y + (*resizing).height as i32 - MIN_HEIGHT as i32;
+                            }
+                        },
+                        _ => {},
+                    }
+                    
+                    // Update window if size or position changed
+                    if (*resizing).x != new_x || (*resizing).y != new_y ||
+                        (*resizing).width != new_width || (*resizing).height != new_height {
+                        // Mark old area as dirty
+                        ds_mark_dirty((*resizing).x, (*resizing).y, (*resizing).width, (*resizing).height);
+                        
+                        (*resizing).x = new_x;
+                        (*resizing).y = new_y;
+                        (*resizing).width = new_width;
+                        (*resizing).height = new_height;
+                        
+                        // Update surface size and position
+                        ds_set_surface_size((*resizing).surface, new_width, new_height);
+                        ds_set_surface_position((*resizing).surface, new_x, new_y);
+                        
+                        // Update buffer pointer
+                        (*resizing).buffer = ds_get_surface_buffer((*resizing).surface);
+                        
+                        (*resizing).invalidated = true;
+                        ds_mark_dirty(new_x, new_y, new_width, new_height);
+                        
+                        // Force immediate render
+                        ds_render();
+                    }
+                }
+            } else {
+                // Button released - stop resizing
+                self.resizing_window = None;
+                self.resize_edge = ResizeEdge::None;
+                unsafe {
+                    ds_update_cursor_position(mouse_x, mouse_y);
+                }
+            }
+            return;
+        }
+        
         // Check if we're dragging - continue dragging while button is held
         if let Some(dragging) = self.dragging_window {
             if left_button {
@@ -386,19 +1004,21 @@ impl WindowManager {
                     (*dragging).x = mouse_x - self.drag_offset_x;
                     (*dragging).y = mouse_y - self.drag_offset_y;
                     
-                    // Clamp to screen bounds
-                    let fb = self.get_framebuffer();
-                    if (*dragging).x < 0 {
-                        (*dragging).x = 0;
-                    }
-                    if (*dragging).y < 0 {
-                        (*dragging).y = 0;
-                    }
-                    if (*dragging).x + (*dragging).width as i32 > (*fb).width as i32 {
-                        (*dragging).x = (*fb).width as i32 - (*dragging).width as i32;
-                    }
-                    if (*dragging).y + (*dragging).height as i32 > (*fb).height as i32 {
-                        (*dragging).y = (*fb).height as i32 - (*dragging).height as i32;
+                    // Clamp to screen bounds (unless maximized)
+                    if !(*dragging).maximized {
+                        let fb = self.get_framebuffer();
+                        if (*dragging).x < 0 {
+                            (*dragging).x = 0;
+                        }
+                        if (*dragging).y < 0 {
+                            (*dragging).y = 0;
+                        }
+                        if (*dragging).x + (*dragging).width as i32 > (*fb).width as i32 {
+                            (*dragging).x = (*fb).width as i32 - (*dragging).width as i32;
+                        }
+                        if (*dragging).y + (*dragging).height as i32 > (*fb).height as i32 {
+                            (*dragging).y = (*fb).height as i32 - (*dragging).height as i32;
+                        }
                     }
                     
                     // Invalidate if position changed
@@ -413,18 +1033,13 @@ impl WindowManager {
                         // Update surface position in display server (marks old and new positions as dirty)
                         ds_set_surface_position((*dragging).surface, (*dragging).x, (*dragging).y);
                         
-                        // Don't update cursor position during drag to prevent cursor artifacts
-                        
                         // Force immediate render to clear artifacts and show window at new position
-                        unsafe {
-                            ds_render();
-                        }
+                        ds_render();
                     }
                 }
             } else {
                 // Button released - stop dragging
                 self.dragging_window = None;
-                // Update cursor position when drag ends
                 unsafe {
                     ds_update_cursor_position(mouse_x, mouse_y);
                 }
@@ -432,17 +1047,22 @@ impl WindowManager {
             return;
         }
         
-        // Not dragging - update cursor position normally
+        // Not dragging or resizing - update cursor position normally
         unsafe {
             ds_update_cursor_position(mouse_x, mouse_y);
         }
 
         // Check for window focus and drag start
         if button_just_pressed {
-            // Check windows in reverse order (top to bottom)
+            // Check windows in reverse order (top to bottom), skip minimized windows
             for i in (0..self.window_count).rev() {
                 if let Some(window) = self.windows[i] {
                     unsafe {
+                        // Skip minimized windows
+                        if (*window).minimized {
+                            continue;
+                        }
+                        
                         let wx = (*window).x;
                         let wy = (*window).y;
                         let ww = (*window).width as i32;
@@ -451,19 +1071,79 @@ impl WindowManager {
                         if mouse_x >= wx && mouse_x < wx + ww &&
                            mouse_y >= wy && mouse_y < wy + wh {
                             
-                            // Check if click is on close button FIRST
+                            // Check for resize edge first (if not in title bar)
+                            if mouse_y >= wy + 20 {
+                                let resize_edge = self.get_resize_edge(window, mouse_x, mouse_y);
+                                if resize_edge != ResizeEdge::None {
+                                    self.resizing_window = Some(window);
+                                    self.resize_edge = resize_edge;
+                                    self.resize_start_x = mouse_x;
+                                    self.resize_start_y = mouse_y;
+                                    self.resize_start_width = (*window).width;
+                                    self.resize_start_height = (*window).height;
+                                    
+                                    // Focus window
+                                    if let Some(old_focused) = self.focused_window {
+                                        if old_focused != window {
+                                            (*old_focused).focused = false;
+                                            (*old_focused).invalidated = true;
+                                            ds_mark_dirty((*old_focused).x, (*old_focused).y, 
+                                                          (*old_focused).width, (*old_focused).height);
+                                        }
+                                    }
+                                    self.focused_window = Some(window);
+                                    (*window).focused = true;
+                                    (*window).invalidated = true;
+                                    self.bring_to_front(window);
+                                    return;
+                                }
+                            }
+                            
+                            // Check if click is on control buttons
+                            let mut button_x = wx + ww as i32 - 18;
+                            
+                            // Close button
                             if ((*window).flags & WINDOW_CLOSABLE) != 0 {
-                                let close_x_start = wx + (*window).width as i32 - 18;
+                                let close_x_start = button_x;
                                 let close_x_end = close_x_start + 16;
                                 let close_y_start = wy + 2;
                                 let close_y_end = close_y_start + 16;
                                 
                                 if mouse_x >= close_x_start && mouse_x < close_x_end &&
                                    mouse_y >= close_y_start && mouse_y < close_y_end {
-                                    // Close button clicked
                                     self.destroy_window(window);
                                     return;
                                 }
+                                button_x -= 20;
+                            }
+                            
+                            // Maximize button
+                            let max_x_start = button_x;
+                            let max_x_end = max_x_start + 16;
+                            let max_y_start = wy + 2;
+                            let max_y_end = max_y_start + 16;
+                            
+                            if mouse_x >= max_x_start && mouse_x < max_x_end &&
+                               mouse_y >= max_y_start && mouse_y < max_y_end {
+                                if (*window).maximized {
+                                    self.unmaximize_window(window);
+                                } else {
+                                    self.maximize_window(window);
+                                }
+                                return;
+                            }
+                            button_x -= 20;
+                            
+                            // Minimize button
+                            let min_x_start = button_x;
+                            let min_x_end = min_x_start + 16;
+                            let min_y_start = wy + 2;
+                            let min_y_end = min_y_start + 16;
+                            
+                            if mouse_x >= min_x_start && mouse_x < min_x_end &&
+                               mouse_y >= min_y_start && mouse_y < min_y_end {
+                                self.minimize_window(window);
+                                return;
                             }
                             
                             // Check if click is in title bar (top 20 pixels)
@@ -486,12 +1166,27 @@ impl WindowManager {
                                 ds_mark_dirty((*window).x, (*window).y, (*window).width, (*window).height);
                                 self.bring_to_front(window);
                                 
-                                // Start dragging if window is movable
-                                if ((*window).flags & WINDOW_MOVABLE) != 0 {
+                                // Start dragging if window is movable and not maximized
+                                if ((*window).flags & WINDOW_MOVABLE) != 0 && !(*window).maximized {
                                     self.dragging_window = Some(window);
                                     self.drag_offset_x = mouse_x - wx;
                                     self.drag_offset_y = mouse_y - wy;
                                 }
+                            } else {
+                                // Click in window content - just focus
+                                if let Some(old_focused) = self.focused_window {
+                                    if old_focused != window {
+                                        (*old_focused).focused = false;
+                                        (*old_focused).invalidated = true;
+                                        ds_mark_dirty((*old_focused).x, (*old_focused).y, 
+                                                      (*old_focused).width, (*old_focused).height);
+                                    }
+                                }
+                                self.focused_window = Some(window);
+                                (*window).focused = true;
+                                (*window).invalidated = true;
+                                ds_mark_dirty((*window).x, (*window).y, (*window).width, (*window).height);
+                                self.bring_to_front(window);
                             }
                             break; // Stop checking other windows
                         }
@@ -502,11 +1197,25 @@ impl WindowManager {
     }
 
     fn update(&mut self) {
-        // Render all invalidated windows
+        // Render all invalidated windows (skip minimized windows)
         unsafe {
             for i in 0..self.window_count {
                 if let Some(window) = self.windows[i] {
+                    // Skip minimized windows
+                    if (*window).minimized {
+                        log_debug(b"update: skipping minimized window\0");
+                        continue;
+                    }
+                    
                     if (*window).invalidated {
+                        logger_rust_log_fmt(0, b"WM\0".as_ptr() as *const c_char,
+                            b"update: rendering window id=%u, pos=%d,%d, size=%ux%u, buffer=%p\0".as_ptr() as *const c_char,
+                            (*window).id, (*window).x, (*window).y, (*window).width, (*window).height, (*window).buffer);
+                        
+                        if (*window).buffer.is_null() {
+                            log_error(b"update: window buffer is null!\0");
+                            continue;
+                        }
                         // Clear window buffer
                         self.clear_window(window, 0x2d2d2d); // Window background
                         
@@ -518,11 +1227,28 @@ impl WindowManager {
                         let title_ptr = (*window).title.as_ptr() as *const c_char;
                         self.draw_text_to_window(window, title_ptr, 4, 4, 0xffffff);
                         
-                        // Draw close button if closable
+                        // Draw window control buttons (minimize, maximize, close)
+                        let mut button_x = (*window).width as i32 - 18;
+                        
+                        // Close button
                         if ((*window).flags & WINDOW_CLOSABLE) != 0 {
-                            self.draw_filled_rect_to_window(window, (*window).width as i32 - 18, 2, 16, 16, 0xff4444);
-                            draw_char_to_window(window, b'X', (*window).width as i32 - 14, 4, 0xffffff);
+                            self.draw_filled_rect_to_window(window, button_x, 2, 16, 16, 0xff4444);
+                            draw_char_to_window(window, b'X', button_x + 2, 4, 0xffffff);
+                            button_x -= 20;
                         }
+                        
+                        // Maximize button
+                        self.draw_filled_rect_to_window(window, button_x, 2, 16, 16, 0x4444ff);
+                        if (*window).maximized {
+                            draw_char_to_window(window, b'R', button_x + 2, 4, 0xffffff); // Restore
+                        } else {
+                            draw_char_to_window(window, b'M', button_x + 2, 4, 0xffffff); // Maximize
+                        }
+                        button_x -= 20;
+                        
+                        // Minimize button
+                        self.draw_filled_rect_to_window(window, button_x, 2, 16, 16, 0x44ff44);
+                        draw_char_to_window(window, b'_', button_x + 2, 4, 0xffffff);
                         
                         // Call custom draw callback if set
                         if let Some(callback) = (*window).draw_callback {
@@ -539,6 +1265,43 @@ impl WindowManager {
                         
                         (*window).invalidated = false;
                         ds_mark_dirty((*window).x, (*window).y, (*window).width, (*window).height);
+                        
+                        // Log successful render, especially for maximized windows
+                        if (*window).maximized {
+                            logger_rust_log_fmt(0, b"WM\0".as_ptr() as *const c_char,
+                                b"update: maximized window id=%u rendered, pos=%d,%d, size=%ux%u\0".as_ptr() as *const c_char,
+                                (*window).id, (*window).x, (*window).y, (*window).width, (*window).height);
+                        } else {
+                            log_debug(b"update: window rendered successfully\0");
+                        }
+                    } else {
+                        // Window not invalidated - check if it should be visible
+                        if (*window).maximized {
+                            logger_rust_log_fmt(0, b"WM\0".as_ptr() as *const c_char,
+                                b"update: maximized window id=%u not invalidated, pos=%d,%d, size=%ux%u, buffer=%p\0".as_ptr() as *const c_char,
+                                (*window).id, (*window).x, (*window).y, (*window).width, (*window).height, (*window).buffer);
+                            
+                            // If a maximized window is not invalidated but should be visible,
+                            // check if it needs to be re-rendered (e.g., after a resize)
+                            if (*window).buffer.is_null() {
+                                log_error(b"update: maximized window has null buffer - invalidating\0");
+                                (*window).invalidated = true;
+                            } else {
+                                // Verify surface matches window - if not, re-invalidate
+                                if !(*window).surface.is_null() {
+                                    let surf_width = (*(*window).surface).width;
+                                    let surf_height = (*(*window).surface).height;
+                                    let surf_x = (*(*window).surface).x;
+                                    let surf_y = (*(*window).surface).y;
+                                    
+                                    if surf_width != (*window).width || surf_height != (*window).height ||
+                                       surf_x != (*window).x || surf_y != (*window).y {
+                                        log_error(b"update: maximized window surface mismatch - re-invalidating\0");
+                                        (*window).invalidated = true;
+                                    }
+                                }
+                            }
+                        }
                     }
                 }
             }

@@ -3,6 +3,7 @@
 #include <stdbool.h>
 #include <limine.h>
 #include "terminal.h"
+#include "logger.h"
 #include "keyboard.h"
 #include "mouse.h"
 #include "shell.h"
@@ -236,6 +237,10 @@ void kmain(void) {
     clear_screen();
     
     // Show boot success message
+    // Initialize logger
+    logger_init();
+    logger_set_level(LOG_DEBUG);  // Enable debug logging
+    
     terminal_print("DEA OS - Boot Successful!\n");
     terminal_print("Video: ");
     terminal_print("Framebuffer detected: ");

@@ -27,6 +27,12 @@ typedef struct window {
     uint32_t *buffer;
     void *surface;  // Display server surface handle
     int32_t z_order;  // Z-order for compositing
+    bool minimized;   // Whether window is minimized
+    bool maximized;   // Whether window is maximized
+    int32_t orig_x;   // Original x position before maximize
+    int32_t orig_y;   // Original y position before maximize
+    uint32_t orig_width;   // Original width before maximize/resize
+    uint32_t orig_height;  // Original height before maximize/resize
 } window_t;
 
 // Window manager functions
