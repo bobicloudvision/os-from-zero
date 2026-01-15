@@ -121,9 +121,10 @@ RUST_AVAILABLE := $(shell command -v $(RUSTC) >/dev/null 2>&1 && echo yes || ech
 
 # Rust library paths
 RUST_WM_LIB := wm_rust/target/x86_64-unknown-none/release/libwm_rust.a
+RUST_DS_LIB := ds_rust/target/x86_64-unknown-none/release/libds_rust.a
 RUST_FS_LIB := fs_rust/target/x86_64-unknown-none/release/libfs_rust.a
 RUST_GPU_LIB := gpu_rust/target/x86_64-unknown-none/release/libgpu_rust.a
-RUST_LIB := $(RUST_WM_LIB) $(RUST_FS_LIB) $(RUST_GPU_LIB)
+RUST_LIB := $(RUST_WM_LIB) $(RUST_DS_LIB) $(RUST_FS_LIB) $(RUST_GPU_LIB)
 
 # Use "find" to glob all *.c, *.S, and *.asm files in the tree and obtain the
 # object and header dependency file names.
@@ -147,11 +148,15 @@ all: bin/$(OUTPUT)
 
 # Build Rust libraries
 .PHONY: rust-lib
-rust-lib: $(RUST_WM_LIB) $(RUST_FS_LIB) $(RUST_GPU_LIB)
+rust-lib: $(RUST_WM_LIB) $(RUST_DS_LIB) $(RUST_FS_LIB) $(RUST_GPU_LIB)
 
 $(RUST_WM_LIB): wm_rust/Cargo.toml wm_rust/src/lib.rs
 	@echo "Building Rust window manager..."
 	cd wm_rust && $(CARGO) build --release --target x86_64-unknown-none
+
+$(RUST_DS_LIB): ds_rust/Cargo.toml ds_rust/src/lib.rs
+	@echo "Building Rust display server..."
+	cd ds_rust && $(CARGO) build --release --target x86_64-unknown-none
 
 $(RUST_FS_LIB): fs_rust/Cargo.toml fs_rust/src/lib.rs
 	@echo "Building Rust filesystem..."
@@ -190,6 +195,7 @@ clean:
 	rm -rf bin obj
 ifeq ($(RUST_AVAILABLE),yes)
 	cd wm_rust && $(CARGO) clean 2>/dev/null || true
+	cd ds_rust && $(CARGO) clean 2>/dev/null || true
 	cd fs_rust && $(CARGO) clean 2>/dev/null || true
 	cd gpu_rust && $(CARGO) clean 2>/dev/null || true
 endif

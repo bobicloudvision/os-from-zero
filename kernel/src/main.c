@@ -219,6 +219,10 @@ void kmain(void) {
     // Initialize GPU rendering system
     gpu_init(framebuffer->address, framebuffer->width, framebuffer->height, framebuffer->pitch / 4);
     
+    // Initialize display server (must be before window manager)
+    extern void ds_init(struct limine_framebuffer *framebuffer);
+    ds_init(framebuffer);
+    
     // Initialize Rust window manager
     wm_init(framebuffer);
     

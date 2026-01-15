@@ -10,24 +10,28 @@ fn panic(_info: &core::panic::PanicInfo) -> ! {
 use core::ptr;
 use core::ffi::{c_char, c_int, c_void};
 
-// External GPU functions
+// Surface structure (must match display server definition)
+#[repr(C)]
+pub struct Surface {
+    pub id: u32,
+    pub x: i32,
+    pub y: i32,
+    pub width: u32,
+    pub height: u32,
+    pub buffer: *mut u32,
+    pub z_order: i32,
+}
+
+// External display server functions
 extern "C" {
-    fn gpu_is_available() -> bool;
-    fn gpu_blit(
-        dst: *mut u32,
-        dst_pitch: u32,
-        src: *const u32,
-        src_pitch: u32,
-        width: u32,
-        height: u32,
-    );
-    fn gpu_render_to_framebuffer(
-        src: *const u32,
-        src_width: u32,
-        src_height: u32,
-        dst_x: i32,
-        dst_y: i32,
-    ) -> bool;
+    fn ds_create_surface(x: c_int, y: c_int, width: u32, height: u32, z_order: c_int) -> *mut Surface;
+    fn ds_destroy_surface(surface: *mut Surface);
+    fn ds_set_surface_position(surface: *mut Surface, x: c_int, y: c_int);
+    fn ds_set_surface_z_order(surface: *mut Surface, z_order: c_int);
+    fn ds_get_surface_buffer(surface: *mut Surface) -> *mut u32;
+    fn ds_mark_dirty(x: c_int, y: c_int, width: u32, height: u32);
+    fn ds_update_cursor_position(x: c_int, y: c_int);
+    fn ds_render();
 }
 
 // Limine framebuffer structure (must match C struct)
@@ -71,82 +75,16 @@ pub struct Window {
     pub invalidated: bool,
     pub draw_callback: Option<extern "C" fn(*mut Window)>,
     pub user_data: *mut c_void,
-    pub buffer: *mut u32,  // Window content buffer
+    pub buffer: *mut u32,  // Window content buffer (points to display server surface buffer)
+    pub surface: *mut Surface, // Display server surface handle
+    pub z_order: i32,      // Z-order for compositing
 }
 
 // Window manager state
 static mut WM_STATE: Option<WindowManager> = None;
 
-// Window pool for static allocation (shared between create and destroy)
+// Window pool for static allocation
 static mut WINDOW_POOL: [Option<Window>; 32] = [const { None }; 32];
-const MAX_BUFFER_SIZE: usize = 800 * 600; // VGA resolution - more reasonable size
-static mut BUFFER_POOL: [[u32; MAX_BUFFER_SIZE]; 32] = [[0; MAX_BUFFER_SIZE]; 32];
-
-// Track previous window positions for proper erasing
-#[derive(Copy, Clone)]
-struct WindowPosition {
-    x: i32,
-    y: i32,
-    width: u32,
-    height: u32,
-}
-
-// Wallpaper buffer - store decoded image for desktop background
-const MAX_WALLPAPER_SIZE: usize = 1920 * 1080; // Support up to Full HD
-static mut WALLPAPER_BUFFER: [u32; MAX_WALLPAPER_SIZE] = [0; MAX_WALLPAPER_SIZE];
-
-// Backbuffer for double buffering - statically allocated
-// Support up to 4K resolution: 3840 * 2160 = 8,294,400 pixels
-const MAX_BACKBUFFER_SIZE: usize = 3840 * 2160;
-static mut BACKBUFFER: [u32; MAX_BACKBUFFER_SIZE] = [0; MAX_BACKBUFFER_SIZE];
-
-// Dirty rectangle for region-based redraw
-#[derive(Copy, Clone, Debug)]
-struct DirtyRect {
-    x: i32,
-    y: i32,
-    width: u32,
-    height: u32,
-    valid: bool,
-}
-
-impl DirtyRect {
-    fn new() -> Self {
-        DirtyRect {
-            x: 0,
-            y: 0,
-            width: 0,
-            height: 0,
-            valid: false,
-        }
-    }
-    
-    fn union(&mut self, other: &DirtyRect) {
-        if !other.valid {
-            return;
-        }
-        
-        if !self.valid {
-            *self = *other;
-            return;
-        }
-        
-        let left = self.x.min(other.x);
-        let top = self.y.min(other.y);
-        let right = (self.x + self.width as i32).max(other.x + other.width as i32);
-        let bottom = (self.y + self.height as i32).max(other.y + other.height as i32);
-        
-        self.x = left;
-        self.y = top;
-        self.width = (right - left) as u32;
-        self.height = (bottom - top) as u32;
-        self.valid = true;
-    }
-    
-    fn clear(&mut self) {
-        self.valid = false;
-    }
-}
 
 struct WindowManager {
     framebuffer: *mut LimineFramebuffer,
@@ -156,32 +94,13 @@ struct WindowManager {
     dragging_window: Option<*mut Window>,
     drag_offset_x: i32,
     drag_offset_y: i32,
-    desktop_color: u32,
-    last_mouse_button: bool,  // Track previous button state for click detection
-    desktop_cleared: bool,    // Track if desktop has been cleared (only clear once)
-    previous_positions: [Option<WindowPosition>; 32], // Track previous window positions
-    mouse_x: i32,              // Current mouse X position for cursor rendering
-    mouse_y: i32,              // Current mouse Y position for cursor rendering
-    last_cursor_x: i32,        // Previous cursor X position (for clearing)
-    last_cursor_y: i32,        // Previous cursor Y position (for clearing)
-    cursor_backup: [u32; (12 + 2) * (16 + 2)], // Backup pixels under cursor (including outline)
-    cursor_backup_valid: bool, // Whether cursor backup is valid
-    last_click_time: u64,      // Timestamp of last click for double-click detection (requires timer)
-    last_click_x: i32,         // X position of last click
-    last_click_y: i32,         // Y position of last click
-    wallpaper_width: u32,      // Wallpaper image width
-    wallpaper_height: u32,     // Wallpaper image height
-    has_wallpaper: bool,       // Whether wallpaper is loaded
-    backbuffer_width: u32,    // Backbuffer width (matches framebuffer)
-    backbuffer_height: u32,    // Backbuffer height (matches framebuffer)
-    backbuffer_initialized: bool, // Whether backbuffer is initialized
-    dirty_rect: DirtyRect,     // Current dirty rectangle for region-based redraw
-    full_redraw: bool,         // Flag for full screen redraw
+    last_mouse_button: bool,
+    next_z_order: i32,  // Next z-order value to assign
 }
 
 impl WindowManager {
     fn new(framebuffer: *mut LimineFramebuffer) -> Self {
-        let mut wm = WindowManager {
+        WindowManager {
             framebuffer,
             windows: [None; 32],
             window_count: 0,
@@ -189,92 +108,15 @@ impl WindowManager {
             dragging_window: None,
             drag_offset_x: 0,
             drag_offset_y: 0,
-            desktop_color: 0x0d1117, // Match terminal background (dark gray)
             last_mouse_button: false,
-            desktop_cleared: false,
-            previous_positions: [const { None }; 32],
-            mouse_x: 0,
-            mouse_y: 0,
-            last_cursor_x: -1,
-            last_cursor_y: -1,
-            cursor_backup: [0; (12 + 2) * (16 + 2)],
-            cursor_backup_valid: false,
-            last_click_time: 0,
-            last_click_x: 0,
-            last_click_y: 0,
-            wallpaper_width: 0,
-            wallpaper_height: 0,
-            has_wallpaper: false,
-            backbuffer_width: 0,
-            backbuffer_height: 0,
-            backbuffer_initialized: false,
-            dirty_rect: DirtyRect::new(),
-            full_redraw: true,
-        };
-        
-        // Initialize backbuffer dimensions
-        unsafe {
-            if !framebuffer.is_null() {
-                wm.backbuffer_width = (*framebuffer).width as u32;
-                wm.backbuffer_height = (*framebuffer).height as u32;
-            }
+            next_z_order: 0,
         }
-        
-        wm
     }
 
     fn get_framebuffer(&self) -> *mut LimineFramebuffer {
         self.framebuffer
     }
-    
-    // Get backbuffer pointer
-    fn get_backbuffer(&self) -> *mut u32 {
-        unsafe {
-            BACKBUFFER.as_mut_ptr()
-        }
-    }
-    
-    // Mark a region as dirty for redraw
-    fn mark_dirty(&mut self, x: i32, y: i32, width: u32, height: u32) {
-        let rect = DirtyRect {
-            x,
-            y,
-            width,
-            height,
-            valid: true,
-        };
-        self.dirty_rect.union(&rect);
-    }
-    
-    // Mark entire screen as dirty
-    fn mark_full_dirty(&mut self) {
-        unsafe {
-            let fb = self.get_framebuffer();
-            if !fb.is_null() {
-                self.dirty_rect = DirtyRect {
-                    x: 0,
-                    y: 0,
-                    width: (*fb).width as u32,
-                    height: (*fb).height as u32,
-                    valid: true,
-                };
-                self.full_redraw = true;
-            }
-        }
-    }
 
-    // Bounds checking helper
-    #[inline(always)]
-    fn is_point_in_bounds(&self, x: i32, y: i32, fb: *mut LimineFramebuffer) -> bool {
-        unsafe {
-            x >= 0 && y >= 0 && 
-            x < (*fb).width as i32 && 
-            y < (*fb).height as i32
-        }
-    }
-
-
-    // Bring window to front (top of Z-order)
     fn bring_to_front(&mut self, window: *mut Window) {
         // Find window index
         let mut idx = None;
@@ -288,65 +130,22 @@ impl WindowManager {
         if let Some(i) = idx {
             // Move window to end of array (top of Z-order)
             let win = self.windows[i];
-            let prev_pos = self.previous_positions[i];
             
             for j in i..self.window_count - 1 {
                 self.windows[j] = self.windows[j + 1];
-                self.previous_positions[j] = self.previous_positions[j + 1];
             }
             
             self.windows[self.window_count - 1] = win;
-            self.previous_positions[self.window_count - 1] = prev_pos;
             
+            // Update z-order to bring to front
             unsafe {
                 if let Some(w) = win {
+                    (*w).z_order = self.next_z_order;
+                    self.next_z_order += 1;
+                    ds_set_surface_z_order((*w).surface, (*w).z_order);
                     (*w).invalidated = true;
-                    // Mark window area as dirty for z-order change
-                    self.mark_dirty((*w).x, (*w).y, (*w).width, (*w).height);
+                    ds_mark_dirty((*w).x, (*w).y, (*w).width, (*w).height);
                 }
-            }
-        }
-    }
-
-    // Resize window support
-    fn resize_window(&mut self, window: *mut Window, new_width: u32, new_height: u32) {
-        unsafe {
-            // Validate new size - check for zero and maximum bounds
-            if new_width == 0 || new_height == 0 {
-                return; // Invalid size
-            }
-            
-            let buffer_size = (new_width * new_height) as usize;
-            if buffer_size > MAX_BUFFER_SIZE {
-                return; // Too large
-            }
-            
-            // Find window slot
-            let slot = (*window).id as usize;
-            if slot >= 32 {
-                return;
-            }
-            
-            // Clear old buffer area
-            let old_size = ((*window).width * (*window).height) as usize;
-            for i in 0..old_size {
-                *(*window).buffer.add(i) = 0;
-            }
-            
-            // Mark old and new window areas as dirty
-            self.mark_dirty((*window).x, (*window).y, (*window).width, (*window).height);
-            
-            // Update dimensions
-            (*window).width = new_width;
-            (*window).height = new_height;
-            (*window).invalidated = true; // Auto-invalidate to trigger re-render
-            
-            // Mark new area as dirty
-            self.mark_dirty((*window).x, (*window).y, new_width, new_height);
-            
-            // Clear new buffer area
-            for i in 0..buffer_size {
-                *(*window).buffer.add(i) = 0;
             }
         }
     }
@@ -356,7 +155,6 @@ impl WindowManager {
             return ptr::null_mut();
         }
 
-        // Allocate window structure
         let window = unsafe {
             // Find an empty slot
             let mut slot_idx = None;
@@ -369,12 +167,27 @@ impl WindowManager {
             
             let slot = match slot_idx {
                 Some(idx) => idx,
-                None => return ptr::null_mut(), // No free slots
+                None => return ptr::null_mut(),
             };
+            
+            // Create display server surface
+            let z_order = self.next_z_order;
+            self.next_z_order += 1;
+            let surface = ds_create_surface(x, y, width, height, z_order);
+            if surface.is_null() {
+                return ptr::null_mut();
+            }
+            
+            // Get surface buffer
+            let buffer = ds_get_surface_buffer(surface);
+            if buffer.is_null() {
+                ds_destroy_surface(surface);
+                return ptr::null_mut();
+            }
             
             // Initialize window in the slot
             let mut new_window = Window {
-                id: slot as u32, // Use slot index as ID for uniqueness
+                id: slot as u32,
                 x: x,
                 y: y,
                 width: width,
@@ -385,7 +198,9 @@ impl WindowManager {
                 invalidated: true,
                 draw_callback: None,
                 user_data: ptr::null_mut(),
-                buffer: ptr::null_mut(),
+                buffer: buffer,
+                surface: surface,
+                z_order: z_order,
             };
             
             // Copy title
@@ -401,52 +216,34 @@ impl WindowManager {
                 new_window.title[0] = 0;
             }
             
-            // Allocate window buffer - each window gets its own buffer
-            // Support HD resolutions: 1920x1080 = 2,073,600 pixels
-            let buffer_size = (width * height) as usize;
-            if buffer_size <= MAX_BUFFER_SIZE {
-                new_window.buffer = BUFFER_POOL[slot].as_mut_ptr();
-            } else {
-                // Window too large, can't allocate buffer
-                return ptr::null_mut();
-            }
-            
             WINDOW_POOL[slot] = Some(new_window);
             let window_ptr = WINDOW_POOL[slot].as_mut().unwrap() as *mut Window;
-            
-            // Force initial render
-            (*window_ptr).invalidated = true;
             
             window_ptr
         };
 
         self.windows[self.window_count] = Some(window);
-        // Initialize previous position
-        unsafe {
-            self.previous_positions[self.window_count] = Some(WindowPosition {
-                x: (*window).x,
-                y: (*window).y,
-                width: (*window).width,
-                height: (*window).height,
-            });
-        }
         self.window_count += 1;
         self.focused_window = Some(window);
         unsafe { 
             (*window).focused = true;
-            (*window).invalidated = true; // Force initial render
+            (*window).invalidated = true;
         }
+        self.bring_to_front(window);
 
         window
     }
 
     fn destroy_window(&mut self, window: *mut Window) {
         unsafe {
-            // Mark window area as dirty (will be redrawn with desktop/underlying windows)
-            self.mark_dirty((*window).x, (*window).y, (*window).width, (*window).height);
+            // Mark window area as dirty
+            ds_mark_dirty((*window).x, (*window).y, (*window).width, (*window).height);
+            
+            // Destroy display server surface
+            ds_destroy_surface((*window).surface);
         }
         
-        // Find and free the window slot in WINDOW_POOL using window ID (which is the slot index)
+        // Find and free the window slot
         unsafe {
             let window_id = (*window).id as usize;
             if window_id < 32 {
@@ -460,11 +257,8 @@ impl WindowManager {
                     // Remove from array
                     for j in i..self.window_count - 1 {
                         self.windows[j] = self.windows[j + 1];
-                        // Also shift previous positions
-                        self.previous_positions[j] = self.previous_positions[j + 1];
                     }
                     self.windows[self.window_count - 1] = None;
-                    self.previous_positions[self.window_count - 1] = None;
                     self.window_count -= 1;
                     
                     if self.focused_window == Some(window) {
@@ -472,35 +266,6 @@ impl WindowManager {
                     }
                     if self.dragging_window == Some(window) {
                         self.dragging_window = None;
-                    }
-                    
-                    // Invalidate only windows that overlapped with the destroyed window
-                    // This is more efficient than invalidating all windows
-                    unsafe {
-                        let destroyed_x = (*window).x;
-                        let destroyed_y = (*window).y;
-                        let destroyed_w = (*window).width as i32;
-                        let destroyed_h = (*window).height as i32;
-                        
-                        for j in 0..self.window_count {
-                            if let Some(remaining_window) = self.windows[j] {
-                                let rem_x = (*remaining_window).x;
-                                let rem_y = (*remaining_window).y;
-                                let rem_w = (*remaining_window).width as i32;
-                                let rem_h = (*remaining_window).height as i32;
-                                
-                                // Check if windows overlap
-                                if !(rem_x + rem_w <= destroyed_x || rem_x >= destroyed_x + destroyed_w ||
-                                     rem_y + rem_h <= destroyed_y || rem_y >= destroyed_y + destroyed_h) {
-                                    (*remaining_window).invalidated = true;
-                                }
-                            }
-                        }
-                    }
-                    
-                    // Force immediate render to clear any artifacts
-                    if self.window_count > 0 {
-                        self.render();
                     }
                     break;
                 }
@@ -511,8 +276,7 @@ impl WindowManager {
     fn invalidate_window(&mut self, window: *mut Window) {
         unsafe {
             (*window).invalidated = true;
-            // Mark window area as dirty for region-based redraw
-            self.mark_dirty((*window).x, (*window).y, (*window).width, (*window).height);
+            ds_mark_dirty((*window).x, (*window).y, (*window).width, (*window).height);
         }
     }
 
@@ -527,7 +291,6 @@ impl WindowManager {
             for i in 0..size {
                 *buffer.add(i) = color;
             }
-            // Don't set invalidated here - we're clearing as part of rendering
         }
     }
 
@@ -544,7 +307,6 @@ impl WindowManager {
             let buffer = (*window).buffer;
             let index = (y as u32 * (*window).width + x as u32) as usize;
             *buffer.add(index) = color;
-            // Don't set invalidated - we'll render when update is called
         }
     }
 
@@ -568,7 +330,6 @@ impl WindowManager {
                     }
                 }
             }
-            // Don't set invalidated - we'll render when update is called
         }
     }
 
@@ -595,7 +356,7 @@ impl WindowManager {
             let mut current_x = x;
             let text_bytes = text as *const u8;
             let mut i = 0;
-            const MAX_TEXT_LENGTH: usize = 1024; // Prevent infinite loops from unterminated strings
+            const MAX_TEXT_LENGTH: usize = 1024;
             
             while i < MAX_TEXT_LENGTH && *text_bytes.add(i) != 0 {
                 let ch = *text_bytes.add(i) as usize;
@@ -604,32 +365,20 @@ impl WindowManager {
                     current_x += 8; // 8 pixels per character
                 } else if ch == b'\n' as usize {
                     current_x = x;
-                    // Note: newline handling would need y increment, simplified here
                 }
                 i += 1;
             }
-            // Don't set invalidated - we'll render when update is called
         }
     }
 
     fn handle_mouse(&mut self, mouse_x: i32, mouse_y: i32, left_button: bool) {
-        // Store mouse position for cursor rendering
-        self.mouse_x = mouse_x;
-        self.mouse_y = mouse_y;
+        // Update cursor position in display server
+        unsafe {
+            ds_update_cursor_position(mouse_x, mouse_y);
+        }
         
         // Track button state for press detection
         let button_just_pressed = left_button && !self.last_mouse_button;
-        
-        // Store click position for potential future double-click detection
-        // TODO: Double-click detection requires a real timer source (e.g., RTC or PIT)
-        // When timer is available, implement double-click by checking:
-        // - Time difference between clicks < threshold (e.g., 500ms)
-        // - Distance between clicks < threshold (e.g., 5 pixels)
-        if button_just_pressed {
-            self.last_click_x = mouse_x;
-            self.last_click_y = mouse_y;
-        }
-        
         self.last_mouse_button = left_button;
         
         // Check if we're dragging - continue dragging while button is held
@@ -657,11 +406,14 @@ impl WindowManager {
                         (*dragging).y = (*fb).height as i32 - (*dragging).height as i32;
                     }
                     
-                    // Invalidate if position changed - mark both old and new positions as dirty
+                    // Update surface position in display server
+                    ds_set_surface_position((*dragging).surface, (*dragging).x, (*dragging).y);
+                    
+                    // Invalidate if position changed
                     if old_x != (*dragging).x || old_y != (*dragging).y {
                         (*dragging).invalidated = true;
-                        self.mark_dirty(old_x, old_y, (*dragging).width, (*dragging).height);
-                        self.mark_dirty((*dragging).x, (*dragging).y, (*dragging).width, (*dragging).height);
+                        ds_mark_dirty(old_x, old_y, (*dragging).width, (*dragging).height);
+                        ds_mark_dirty((*dragging).x, (*dragging).y, (*dragging).width, (*dragging).height);
                     }
                 }
             } else {
@@ -672,7 +424,6 @@ impl WindowManager {
         }
 
         // Check for window focus and drag start
-        // Only check on button press (transition from not pressed to pressed)
         if button_just_pressed {
             // Check windows in reverse order (top to bottom)
             for i in (0..self.window_count).rev() {
@@ -683,13 +434,10 @@ impl WindowManager {
                         let ww = (*window).width as i32;
                         let wh = (*window).height as i32;
                         
-                        // Check if click is within window bounds
-                        // Note: mouse coordinates are in screen space, window coordinates are in screen space
                         if mouse_x >= wx && mouse_x < wx + ww &&
                            mouse_y >= wy && mouse_y < wy + wh {
                             
-                            // Check if click is on close button FIRST (before checking title bar)
-                            // Close button takes priority over dragging
+                            // Check if click is on close button FIRST
                             if ((*window).flags & WINDOW_CLOSABLE) != 0 {
                                 let close_x_start = wx + (*window).width as i32 - 18;
                                 let close_x_end = close_x_start + 16;
@@ -704,7 +452,7 @@ impl WindowManager {
                                 }
                             }
                             
-                            // Check if click is in title bar (top 20 pixels, relative to window)
+                            // Check if click is in title bar (top 20 pixels)
                             let title_bar_y_start = wy;
                             let title_bar_y_end = wy + 20;
                             
@@ -714,777 +462,69 @@ impl WindowManager {
                                     if old_focused != window {
                                         (*old_focused).focused = false;
                                         (*old_focused).invalidated = true;
-                                        self.mark_dirty((*old_focused).x, (*old_focused).y, 
+                                        ds_mark_dirty((*old_focused).x, (*old_focused).y, 
                                                       (*old_focused).width, (*old_focused).height);
                                     }
                                 }
                                 self.focused_window = Some(window);
                                 (*window).focused = true;
                                 (*window).invalidated = true;
-                                self.mark_dirty((*window).x, (*window).y, (*window).width, (*window).height);
+                                ds_mark_dirty((*window).x, (*window).y, (*window).width, (*window).height);
                                 self.bring_to_front(window);
                                 
                                 // Start dragging if window is movable
                                 if ((*window).flags & WINDOW_MOVABLE) != 0 {
                                     self.dragging_window = Some(window);
-                                    // Calculate offset from window origin (where in title bar we clicked)
                                     self.drag_offset_x = mouse_x - wx;
                                     self.drag_offset_y = mouse_y - wy;
                                 }
                             }
-                            break; // Stop checking other windows (topmost window gets the click)
+                            break; // Stop checking other windows
                         }
                     }
                 }
-            }
-        }
-    }
-
-    fn render(&mut self) {
-        unsafe {
-            let fb = self.get_framebuffer();
-            if fb.is_null() {
-                return;
-            }
-            
-            // Initialize backbuffer on first render
-            if !self.backbuffer_initialized {
-                self.backbuffer_width = (*fb).width as u32;
-                self.backbuffer_height = (*fb).height as u32;
-                self.backbuffer_initialized = true;
-                self.full_redraw = true;
-            }
-            
-            // Determine what needs to be redrawn
-            let needs_full_redraw = self.full_redraw || !self.desktop_cleared;
-            
-            if needs_full_redraw {
-                // Full screen redraw - clear entire backbuffer
-                self.clear_backbuffer();
-                self.desktop_cleared = true;
-                self.full_redraw = false;
-                self.dirty_rect = DirtyRect {
-                    x: 0,
-                    y: 0,
-                    width: self.backbuffer_width,
-                    height: self.backbuffer_height,
-                    valid: true,
-                };
-            }
-            
-            // Copy dirty_rect to avoid borrowing conflicts
-            let dirty_rect_copy = self.dirty_rect;
-            
-            // Render desktop/wallpaper in dirty regions
-            if dirty_rect_copy.valid {
-                self.render_desktop_to_backbuffer(&dirty_rect_copy);
-            }
-            
-            // Render windows in z-order (bottom to top) - only in dirty regions
-            if dirty_rect_copy.valid {
-                for i in 0..self.window_count {
-                    if let Some(window) = self.windows[i] {
-                        // Check if window overlaps with dirty region
-                        if self.window_overlaps_dirty(window, &dirty_rect_copy) {
-                            self.render_window_to_backbuffer(window);
-                        }
-                    }
-                }
-            }
-            
-            // Always render cursor last on backbuffer
-            self.render_cursor_to_backbuffer();
-            
-            // Copy backbuffer to framebuffer (only dirty region for performance)
-            if dirty_rect_copy.valid {
-                self.copy_backbuffer_to_framebuffer(&dirty_rect_copy);
-            }
-            
-            // Clear dirty rectangle after rendering
-            self.dirty_rect.clear();
-        }
-    }
-    
-    fn clear_cursor_from_backbuffer(&mut self, x: i32, y: i32) {
-        unsafe {
-            const CURSOR_WIDTH: usize = 12;
-            const CURSOR_HEIGHT: usize = 16;
-            const BACKUP_WIDTH: usize = CURSOR_WIDTH + 2;  // Include outline
-            const BACKUP_HEIGHT: usize = CURSOR_HEIGHT + 2; // Include outline
-            
-            if !self.cursor_backup_valid {
-                // If no backup available, just clear to desktop color (fallback)
-                let backbuffer = self.get_backbuffer();
-                let bb_width = self.backbuffer_width as usize;
-                let bb_height = self.backbuffer_height as usize;
-                
-                for row in -1..=(CURSOR_HEIGHT as i32) {
-                    for col in -1..=(CURSOR_WIDTH as i32) {
-                        let px = x + col;
-                        let py = y + row;
-                        
-                        if px >= 0 && py >= 0 && 
-                           px < bb_width as i32 && py < bb_height as i32 {
-                            *backbuffer.add((py as usize) * bb_width + (px as usize)) = self.desktop_color;
-                        }
-                    }
-                }
-                return;
-            }
-            
-            // Restore saved background pixels
-            let backbuffer = self.get_backbuffer();
-            let bb_width = self.backbuffer_width as usize;
-            let bb_height = self.backbuffer_height as usize;
-            
-            for row in 0..BACKUP_HEIGHT {
-                for col in 0..BACKUP_WIDTH {
-                    let px = x + col as i32 - 1; // -1 for outline
-                    let py = y + row as i32 - 1; // -1 for outline
-                    
-                    if px >= 0 && py >= 0 && 
-                       px < bb_width as i32 && py < bb_height as i32 {
-                        *backbuffer.add((py as usize) * bb_width + (px as usize)) = 
-                            self.cursor_backup[row * BACKUP_WIDTH + col];
-                    }
-                }
-            }
-            
-            self.cursor_backup_valid = false;
-        }
-    }
-    
-    fn save_cursor_background_from_backbuffer(&mut self, x: i32, y: i32) {
-        unsafe {
-            const CURSOR_WIDTH: usize = 12;
-            const CURSOR_HEIGHT: usize = 16;
-            const BACKUP_WIDTH: usize = CURSOR_WIDTH + 2;  // Include outline
-            const BACKUP_HEIGHT: usize = CURSOR_HEIGHT + 2; // Include outline
-            
-            let backbuffer = self.get_backbuffer();
-            let bb_width = self.backbuffer_width as usize;
-            let bb_height = self.backbuffer_height as usize;
-            
-            for row in 0..BACKUP_HEIGHT {
-                for col in 0..BACKUP_WIDTH {
-                    let px = x + col as i32 - 1; // -1 for outline
-                    let py = y + row as i32 - 1; // -1 for outline
-                    
-                    if px >= 0 && py >= 0 && 
-                       px < bb_width as i32 && py < bb_height as i32 {
-                        self.cursor_backup[row * BACKUP_WIDTH + col] = 
-                            *backbuffer.add((py as usize) * bb_width + (px as usize));
-                    } else {
-                        // If outside screen bounds, save desktop color
-                        self.cursor_backup[row * BACKUP_WIDTH + col] = self.desktop_color;
-                    }
-                }
-            }
-            self.cursor_backup_valid = true;
-        }
-    }
-    
-    fn render_cursor_to_backbuffer(&mut self) {
-        unsafe {
-            // Mouse cursor bitmap (12x16 pixels)
-            const CURSOR_BITMAP: [u16; 16] = [
-                0b110000000000,  // ##
-                0b111000000000,  // ###
-                0b111100000000,  // ####
-                0b111110000000,  // #####
-                0b111111000000,  // ######
-                0b111111100000,  // #######
-                0b111111110000,  // ########
-                0b111111111000,  // #########
-                0b111111100000,  // #######
-                0b111111100000,  // #######
-                0b110110000000,  // ## ##
-                0b110011000000,  // ##  ##
-                0b100001100000,  // #    ##
-                0b000001100000,  //      ##
-                0b000000110000,  //       ##
-                0b000000110000   //       ##
-            ];
-            
-            const CURSOR_WIDTH: usize = 12;
-            const CURSOR_HEIGHT: usize = 16;
-            const CURSOR_COLOR: u32 = 0xFFFFFF; // White
-            const CURSOR_OUTLINE_COLOR: u32 = 0x000000; // Black
-            
-            let x = self.mouse_x;
-            let y = self.mouse_y;
-            
-            // Clear previous cursor position only if cursor actually moved
-            if self.last_cursor_x >= 0 && self.last_cursor_y >= 0 && 
-               (self.last_cursor_x != x || self.last_cursor_y != y) {
-                self.clear_cursor_from_backbuffer(self.last_cursor_x, self.last_cursor_y);
-                // Mark cursor area as dirty for redraw
-                self.mark_dirty(self.last_cursor_x - 1, self.last_cursor_y - 1, 
-                              CURSOR_WIDTH as u32 + 2, CURSOR_HEIGHT as u32 + 2);
-            }
-            
-            // Draw cursor at new position (only if position changed or first time)
-            if self.last_cursor_x != x || self.last_cursor_y != y || 
-               self.last_cursor_x == -1 || self.last_cursor_y == -1 {
-                // Save background pixels before drawing
-                self.save_cursor_background_from_backbuffer(x, y);
-                
-                let backbuffer = self.get_backbuffer();
-                let bb_width = self.backbuffer_width as usize;
-                let bb_height = self.backbuffer_height as usize;
-                
-                // Draw cursor with black outline first, then white fill
-                for row in 0..CURSOR_HEIGHT {
-                    let bitmap_row = CURSOR_BITMAP[row];
-                    for col in 0..CURSOR_WIDTH {
-                        if (bitmap_row & (1 << (11 - col))) != 0 {
-                            // Draw black outline pixels around the white pixel
-                            for dy in -1..=1 {
-                                for dx in -1..=1 {
-                                    if dx == 0 && dy == 0 {
-                                        continue; // Skip center pixel
-                                    }
-                                    let px = x + col as i32 + dx;
-                                    let py = y + row as i32 + dy;
-                                    
-                                    if px >= 0 && py >= 0 && 
-                                       px < bb_width as i32 && py < bb_height as i32 {
-                                        *backbuffer.add((py as usize) * bb_width + (px as usize)) = CURSOR_OUTLINE_COLOR;
-                                    }
-                                }
-                            }
-                        }
-                    }
-                }
-                
-                // Draw white cursor pixels on top
-                for row in 0..CURSOR_HEIGHT {
-                    let bitmap_row = CURSOR_BITMAP[row];
-                    for col in 0..CURSOR_WIDTH {
-                        if (bitmap_row & (1 << (11 - col))) != 0 {
-                            let px = x + col as i32;
-                            let py = y + row as i32;
-                            
-                            if px >= 0 && py >= 0 && 
-                               px < bb_width as i32 && py < bb_height as i32 {
-                                *backbuffer.add((py as usize) * bb_width + (px as usize)) = CURSOR_COLOR;
-                            }
-                        }
-                    }
-                }
-                
-                // Mark cursor area as dirty
-                self.mark_dirty(x - 1, y - 1, CURSOR_WIDTH as u32 + 2, CURSOR_HEIGHT as u32 + 2);
-                
-                // Update last position
-                self.last_cursor_x = x;
-                self.last_cursor_y = y;
-            }
-        }
-    }
-    
-
-    fn erase_window_area(&mut self, fb: *mut LimineFramebuffer, x: i32, y: i32, width: u32, height: u32) {
-        unsafe {
-            let fb_ptr = (*fb).address;
-            let pitch = (*fb).pitch as usize / 4;
-            let fb_w = (*fb).width as usize;
-            let fb_h = (*fb).height as usize;
-            
-            // Calculate bounds with proper clamping and overflow protection
-            let start_x = if x < 0 { 0 } else { x as usize };
-            let start_y = if y < 0 { 0 } else { y as usize };
-            let end_x = {
-                // Check for overflow before casting
-                let x_i64 = x as i64;
-                let width_i64 = width as i64;
-                if x_i64 > 0 && width_i64 > 0 && x_i64 > (usize::MAX as i64) - width_i64 {
-                    fb_w // Overflow protection: clamp to framebuffer width
-                } else {
-                    let calculated = (x_i64 + width_i64) as usize;
-                    if calculated > fb_w { fb_w } else { calculated }
-                }
-            };
-            let end_y = {
-                // Check for overflow before casting
-                let y_i64 = y as i64;
-                let height_i64 = height as i64;
-                if y_i64 > 0 && height_i64 > 0 && y_i64 > (usize::MAX as i64) - height_i64 {
-                    fb_h // Overflow protection: clamp to framebuffer height
-                } else {
-                    let calculated = (y_i64 + height_i64) as usize;
-                    if calculated > fb_h { fb_h } else { calculated }
-                }
-            };
-            
-            // Ensure we have valid bounds
-            if start_x < end_x && start_y < end_y {
-                for fy in start_y..end_y {
-                    for fx in start_x..end_x {
-                        *fb_ptr.add(fy * pitch + fx) = self.desktop_color;
-                    }
-                }
-            }
-        }
-    }
-    
-
-    // Render window to backbuffer (instead of framebuffer)
-    fn render_window_to_backbuffer(&mut self, window: *mut Window) {
-        unsafe {
-            if (*window).buffer.is_null() {
-                return; // Can't render without a buffer
-            }
-            
-            // Find window index to get previous position
-            let mut window_idx = None;
-            for i in 0..self.window_count {
-                if self.windows[i] == Some(window) {
-                    window_idx = Some(i);
-                    break;
-                }
-            }
-            
-            let current_x = (*window).x;
-            let current_y = (*window).y;
-            let current_w = (*window).width;
-            let current_h = (*window).height;
-            
-            // Mark old position as dirty if window moved/resized
-            if let Some(idx) = window_idx {
-                if let Some(ref prev_pos) = self.previous_positions[idx] {
-                    if prev_pos.x != current_x || prev_pos.y != current_y ||
-                       prev_pos.width != current_w || prev_pos.height != current_h {
-                        // Window moved or resized - mark old and new positions as dirty
-                        self.mark_dirty(prev_pos.x, prev_pos.y, prev_pos.width, prev_pos.height);
-                        self.mark_dirty(current_x, current_y, current_w, current_h);
-                    }
-                }
-                // Update previous position
-                self.previous_positions[idx] = Some(WindowPosition {
-                    x: current_x,
-                    y: current_y,
-                    width: current_w,
-                    height: current_h,
-                });
-            }
-            
-            if (*window).invalidated {
-                // Clear window buffer
-                self.clear_window(window, 0x2d2d2d); // Window background
-                
-                // Draw window border and title bar
-                let title_color = if (*window).focused { 0x4a90e2 } else { 0x404040 };
-                self.draw_filled_rect_to_window(window, 0, 0, (*window).width, 20, title_color);
-                
-                // Draw title text
-                let title_ptr = (*window).title.as_ptr() as *const c_char;
-                self.draw_text_to_window(window, title_ptr, 4, 4, 0xffffff);
-                
-                // Draw close button if closable
-                if ((*window).flags & WINDOW_CLOSABLE) != 0 {
-                    self.draw_filled_rect_to_window(window, (*window).width as i32 - 18, 2, 16, 16, 0xff4444);
-                    // Draw 'X' character for close button
-                    draw_char_to_window(window, b'X', (*window).width as i32 - 14, 4, 0xffffff);
-                }
-                
-                // Call custom draw callback if set
-                if let Some(callback) = (*window).draw_callback {
-                    callback(window);
-                }
-                
-                (*window).invalidated = false;
-            }
-            
-            // Blit window buffer to backbuffer
-            let backbuffer = self.get_backbuffer();
-            let bb_width = self.backbuffer_width as usize;
-            let bb_height = self.backbuffer_height as usize;
-            let win_x = (*window).x as usize;
-            let win_y = (*window).y as usize;
-            let win_w = (*window).width as usize;
-            let win_h = (*window).height as usize;
-            
-            if (*window).buffer.is_null() {
-                return;
-            }
-            
-            let win_buffer = (*window).buffer;
-            
-            // Optimized: Use copy_nonoverlapping for row-by-row copy (faster than pixel-by-pixel)
-            for y in 0..win_h {
-                let bb_y = win_y + y;
-                if bb_y >= bb_height {
-                    break;
-                }
-                
-                let visible_width = core::cmp::min(win_w, bb_width.saturating_sub(win_x));
-                if visible_width == 0 {
-                    continue;
-                }
-                
-                let src = win_buffer.add(y * win_w);
-                let dst = backbuffer.add(bb_y * bb_width + win_x);
-                
-                // Fast copy entire row at once
-                core::ptr::copy_nonoverlapping(src, dst, visible_width);
             }
         }
     }
 
     fn update(&mut self) {
-        // Check if cursor moved BEFORE any rendering operations
-        let cursor_moved = self.mouse_x != self.last_cursor_x || 
-                           self.mouse_y != self.last_cursor_y;
-        
-        let needs_window_render = unsafe {
-            if self.window_count == 0 {
-                false
-            } else {
-                self.dragging_window.is_some() || 
-                self.windows.iter()
-                    .take(self.window_count)
-                    .filter_map(|&w| w)
-                    .any(|w| (*w).invalidated)
-            }
-        };
-        
-        // Only render if something changed
-        if needs_window_render || cursor_moved || self.dirty_rect.valid {
-            if needs_window_render || self.dirty_rect.valid {
-                self.render(); // This calls render_cursor_to_backbuffer at the end
-            } else if cursor_moved {
-                // Only cursor moved - render cursor on backbuffer and copy to framebuffer
-                // Mark cursor area as dirty
-                const CURSOR_WIDTH: usize = 12;
-                const CURSOR_HEIGHT: usize = 16;
-                if self.last_cursor_x >= 0 && self.last_cursor_y >= 0 {
-                    self.mark_dirty(self.last_cursor_x - 1, self.last_cursor_y - 1, 
-                                  CURSOR_WIDTH as u32 + 2, CURSOR_HEIGHT as u32 + 2);
-                }
-                self.mark_dirty(self.mouse_x - 1, self.mouse_y - 1, 
-                              CURSOR_WIDTH as u32 + 2, CURSOR_HEIGHT as u32 + 2);
-                
-                // Copy dirty_rect to avoid borrowing conflicts
-                let dirty_rect_copy = self.dirty_rect;
-                
-                // Render cursor to backbuffer
-                self.render_cursor_to_backbuffer();
-                
-                // Copy dirty region (cursor area) to framebuffer
-                if dirty_rect_copy.valid {
-                    self.copy_backbuffer_to_framebuffer(&dirty_rect_copy);
-                    self.dirty_rect.clear();
-                }
-            }
-        }
-    }
-
-    // Clear entire backbuffer
-    fn clear_backbuffer(&mut self) {
+        // Render all invalidated windows
         unsafe {
-            let backbuffer = self.get_backbuffer();
-            let size = (self.backbuffer_width * self.backbuffer_height) as usize;
-            if size > MAX_BACKBUFFER_SIZE {
-                return;
-            }
-            
-            // Fill with desktop color
-            let color = self.desktop_color;
-            for i in 0..size {
-                *backbuffer.add(i) = color;
-            }
-        }
-    }
-    
-    // Render desktop/wallpaper to backbuffer (in dirty region)
-    fn render_desktop_to_backbuffer(&mut self, dirty: &DirtyRect) {
-        unsafe {
-            if !dirty.valid {
-                return;
-            }
-            
-            let backbuffer = self.get_backbuffer();
-            let bb_width = self.backbuffer_width as usize;
-            
-            if self.has_wallpaper && self.wallpaper_width > 0 && self.wallpaper_height > 0 {
-                // Draw wallpaper in dirty region
-                let wp_width = self.wallpaper_width as usize;
-                let wp_height = self.wallpaper_height as usize;
-                
-                let start_x = dirty.x.max(0) as usize;
-                let start_y = dirty.y.max(0) as usize;
-                let end_x = ((dirty.x + dirty.width as i32).min(self.backbuffer_width as i32)).max(0) as usize;
-                let end_y = ((dirty.y + dirty.height as i32).min(self.backbuffer_height as i32)).max(0) as usize;
-                
-                for y in start_y..end_y {
-                    for x in start_x..end_x {
-                        // Simple nearest-neighbor scaling
-                        let src_y = (y * wp_height) / self.backbuffer_height as usize;
-                        let src_x = (x * wp_width) / self.backbuffer_width as usize;
-                        let src_idx = src_y * wp_width + src_x;
+            for i in 0..self.window_count {
+                if let Some(window) = self.windows[i] {
+                    if (*window).invalidated {
+                        // Clear window buffer
+                        self.clear_window(window, 0x2d2d2d); // Window background
                         
-                        if src_idx < MAX_WALLPAPER_SIZE {
-                            let pixel = WALLPAPER_BUFFER[src_idx];
-                            *backbuffer.add(y * bb_width + x) = pixel;
+                        // Draw window border and title bar
+                        let title_color = if (*window).focused { 0x4a90e2 } else { 0x404040 };
+                        self.draw_filled_rect_to_window(window, 0, 0, (*window).width, 20, title_color);
+                        
+                        // Draw title text
+                        let title_ptr = (*window).title.as_ptr() as *const c_char;
+                        self.draw_text_to_window(window, title_ptr, 4, 4, 0xffffff);
+                        
+                        // Draw close button if closable
+                        if ((*window).flags & WINDOW_CLOSABLE) != 0 {
+                            self.draw_filled_rect_to_window(window, (*window).width as i32 - 18, 2, 16, 16, 0xff4444);
+                            draw_char_to_window(window, b'X', (*window).width as i32 - 14, 4, 0xffffff);
                         }
-                    }
-                }
-            } else {
-                // Fill dirty region with solid color
-                let color = self.desktop_color;
-                let start_x = dirty.x.max(0) as usize;
-                let start_y = dirty.y.max(0) as usize;
-                let end_x = ((dirty.x + dirty.width as i32).min(self.backbuffer_width as i32)).max(0) as usize;
-                let end_y = ((dirty.y + dirty.height as i32).min(self.backbuffer_height as i32)).max(0) as usize;
-                
-                for y in start_y..end_y {
-                    for x in start_x..end_x {
-                        *backbuffer.add(y * bb_width + x) = color;
+                        
+                        // Call custom draw callback if set
+                        if let Some(callback) = (*window).draw_callback {
+                            callback(window);
+                        }
+                        
+                        (*window).invalidated = false;
+                        ds_mark_dirty((*window).x, (*window).y, (*window).width, (*window).height);
                     }
                 }
             }
-        }
-    }
-    
-    // Check if window overlaps with dirty region
-    fn window_overlaps_dirty(&self, window: *mut Window, dirty: &DirtyRect) -> bool {
-        if !dirty.valid {
-            return false;
         }
         
+        // Request display server to render
         unsafe {
-            let wx = (*window).x;
-            let wy = (*window).y;
-            let ww = (*window).width as i32;
-            let wh = (*window).height as i32;
-            
-            // Check for overlap
-            !(wx + ww <= dirty.x || wx >= dirty.x + dirty.width as i32 ||
-              wy + wh <= dirty.y || wy >= dirty.y + dirty.height as i32)
-        }
-    }
-    
-    // Copy backbuffer to framebuffer (only dirty region)
-    // Uses GPU acceleration if available
-    fn copy_backbuffer_to_framebuffer(&self, dirty: &DirtyRect) {
-        unsafe {
-            let fb = self.get_framebuffer();
-            if fb.is_null() {
-                return;
-            }
-            
-            if !dirty.valid {
-                return;
-            }
-            
-            let fb_ptr = (*fb).address;
-            let fb_pitch = (*fb).pitch as usize / 4;
-            let fb_width = (*fb).width as usize;
-            let fb_height = (*fb).height as usize;
-            
-            let backbuffer = self.get_backbuffer();
-            let bb_width = self.backbuffer_width as usize;
-            
-            let start_x = dirty.x.max(0) as usize;
-            let start_y = dirty.y.max(0) as usize;
-            let end_x = ((dirty.x + dirty.width as i32).min(fb_width as i32)).max(0) as usize;
-            let end_y = ((dirty.y + dirty.height as i32).min(fb_height as i32)).max(0) as usize;
-            
-            let width = end_x - start_x;
-            let height = end_y - start_y;
-            
-            if width == 0 || height == 0 {
-                return;
-            }
-            
-            // Try GPU-accelerated rendering first
-            if gpu_is_available() {
-                // Use GPU blit for the dirty region
-                let src_region = backbuffer.add(start_y * bb_width + start_x);
-                let dst_region = fb_ptr.add(start_y * fb_pitch + start_x);
-                gpu_blit(
-                    dst_region,
-                    fb_pitch as u32,
-                    src_region,
-                    bb_width as u32,
-                    width as u32,
-                    height as u32,
-                );
-                return; // GPU rendering succeeded
-            }
-            
-            // Fallback to CPU-based row-by-row copy
-            for y in start_y..end_y {
-                if width > 0 {
-                    let src = backbuffer.add(y * bb_width + start_x);
-                    let dst = fb_ptr.add(y * fb_pitch + start_x);
-                    core::ptr::copy_nonoverlapping(src, dst, width);
-                }
-            }
-        }
-    }
-    
-    // Optimized desktop clear using faster fill methods
-    // If wallpaper is loaded, draw it; otherwise use solid color
-    fn clear_desktop_fast(&mut self, fb: *mut LimineFramebuffer) {
-        unsafe {
-            let fb_ptr = (*fb).address;
-            let width = (*fb).width as usize;
-            let height = (*fb).height as usize;
-            let pitch = (*fb).pitch as usize / 4;
-            
-            // Safety check: ensure valid dimensions
-            if width == 0 || height == 0 {
-                return;
-            }
-            
-            if self.has_wallpaper && self.wallpaper_width > 0 && self.wallpaper_height > 0 {
-                // Draw wallpaper (stretch to fit screen)
-                self.draw_wallpaper(fb);
-            } else {
-                // Fill with solid color
-                let color = self.desktop_color;
-                for x in 0..width {
-                    core::ptr::write_volatile(fb_ptr.add(x), color);
-                }
-                
-                // Copy first row to all other rows (much faster than filling each row individually)
-                for y in 1..height {
-                    let src = fb_ptr;
-                    let dst = fb_ptr.add(y * pitch);
-                    core::ptr::copy_nonoverlapping(src, dst, width);
-                }
-            }
-        }
-    }
-    
-    // Draw wallpaper to framebuffer (stretch to fit)
-    fn draw_wallpaper(&self, fb: *mut LimineFramebuffer) {
-        unsafe {
-            let fb_ptr = (*fb).address;
-            let fb_width = (*fb).width as usize;
-            let fb_height = (*fb).height as usize;
-            let fb_pitch = (*fb).pitch as usize / 4;
-            let wp_width = self.wallpaper_width as usize;
-            let wp_height = self.wallpaper_height as usize;
-            
-            if wp_width == 0 || wp_height == 0 {
-                return;
-            }
-            
-            // Simple nearest-neighbor scaling
-            for y in 0..fb_height {
-                let src_y = (y * wp_height) / fb_height;
-                for x in 0..fb_width {
-                    let src_x = (x * wp_width) / fb_width;
-                    let src_idx = src_y * wp_width + src_x;
-                    if src_idx < MAX_WALLPAPER_SIZE {
-                        let pixel = WALLPAPER_BUFFER[src_idx];
-                        *fb_ptr.add(y * fb_pitch + x) = pixel;
-                    }
-                }
-            }
-        }
-    }
-    
-    // Minimal JPEG decoder - handles basic JPEG files
-    // This is a simplified decoder for no_std environment
-    fn decode_jpeg(&mut self, jpeg_data: *const u8, jpeg_size: usize) -> bool {
-        unsafe {
-            // Check JPEG header (FF D8 FF)
-            if jpeg_size < 3 {
-                return false;
-            }
-            
-            if *jpeg_data != 0xFF || *jpeg_data.add(1) != 0xD8 || *jpeg_data.add(2) != 0xFF {
-                return false; // Not a valid JPEG
-            }
-            
-            // For now, this is a placeholder - full JPEG decoding is complex
-            // In a real implementation, you would:
-            // 1. Parse SOF (Start of Frame) to get dimensions
-            // 2. Parse quantization tables
-            // 3. Parse Huffman tables
-            // 4. Decode MCU blocks
-            // 5. Apply IDCT and color conversion
-            // 6. Convert YCbCr to RGB
-            
-            // For demonstration, we'll create a simple pattern
-            // In production, you'd use a proper JPEG decoder library
-            // or implement the full JPEG decoding algorithm
-            
-            // Try to extract basic info from JPEG markers
-            let mut pos = 2;
-            let mut width = 0;
-            let mut height = 0;
-            
-            while pos < jpeg_size - 8 {
-                if *jpeg_data.add(pos) == 0xFF {
-                    let marker = *jpeg_data.add(pos + 1);
-                    // SOF0 marker (Start of Frame)
-                    if marker == 0xC0 || marker == 0xC2 {
-                        if pos + 8 < jpeg_size {
-                            height = (*jpeg_data.add(pos + 5) as usize) << 8 | (*jpeg_data.add(pos + 6) as usize);
-                            width = (*jpeg_data.add(pos + 7) as usize) << 8 | (*jpeg_data.add(pos + 8) as usize);
-                            break;
-                        }
-                    }
-                }
-                pos += 1;
-            }
-            
-            // If we couldn't parse dimensions, use a default
-            if width == 0 || height == 0 {
-                width = 800;
-                height = 600;
-            }
-            
-            // For now, generate a simple gradient pattern as placeholder
-            // TODO: Implement full JPEG decoding
-            for y in 0..height {
-                for x in 0..width {
-                    if y * width + x < MAX_WALLPAPER_SIZE {
-                        // Simple gradient pattern (replace with actual JPEG decoding)
-                        let r = ((x * 255) / width.max(1)) as u32;
-                        let g = ((y * 255) / height.max(1)) as u32;
-                        let b = 128u32;
-                        WALLPAPER_BUFFER[y * width + x] = (r << 16) | (g << 8) | b;
-                    }
-                }
-            }
-            
-            self.wallpaper_width = width as u32;
-            self.wallpaper_height = height as u32;
-            self.has_wallpaper = true;
-            
-            true
-        }
-    }
-    
-    // Load wallpaper from filesystem
-    fn load_wallpaper(&mut self, filename: *const c_char) -> bool {
-        // Declare external filesystem functions
-        extern "C" {
-            fn fs_read_file(name: *const c_char, buffer: *mut u8, size: *mut usize) -> bool;
-        }
-        
-        unsafe {
-            // Buffer for reading JPEG file (limited by MAX_FILE_SIZE = 1024)
-            // For larger files, you'd need to increase MAX_FILE_SIZE or use streaming
-            let mut jpeg_buffer: [u8; 1024] = [0; 1024];
-            let mut size: usize = 0;
-            
-            if !fs_read_file(filename, jpeg_buffer.as_mut_ptr(), &mut size) {
-                return false;
-            }
-            
-            if size == 0 {
-                return false;
-            }
-            
-            // Decode JPEG
-            self.decode_jpeg(jpeg_buffer.as_ptr(), size)
+            ds_render();
         }
     }
 }
@@ -1567,7 +607,7 @@ fn get_font_glyph(ch: u8) -> [u8; 8] {
         b'/' => [0x00, 0x06, 0x0C, 0x18, 0x30, 0x60, 0x00, 0x00],
         b'\\' => [0x00, 0x60, 0x30, 0x18, 0x0C, 0x06, 0x00, 0x00],
         b'%' => [0x00, 0x46, 0x66, 0x30, 0x18, 0xCC, 0xC4, 0x00],
-        _ => [0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00], // Unknown character
+        _ => [0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00],
     }
 }
 
@@ -1748,7 +788,6 @@ pub extern "C" fn wm_get_window_info(index: c_int, x: *mut c_int, y: *mut c_int,
                     *w = (*window).width as c_int;
                     *h = (*window).height as c_int;
                     
-                    // Copy title
                     let title_bytes = (*window).title.as_ptr();
                     let title_dest = title as *mut u8;
                     let mut i = 0;
@@ -1764,36 +803,10 @@ pub extern "C" fn wm_get_window_info(index: c_int, x: *mut c_int, y: *mut c_int,
 }
 
 #[no_mangle]
-pub extern "C" fn wm_resize_window(window: *mut Window, new_width: u32, new_height: u32) {
-    unsafe {
-        if let Some(ref mut wm) = WM_STATE {
-            wm.resize_window(window, new_width, new_height);
-        }
-    }
-}
-
-#[no_mangle]
 pub extern "C" fn wm_bring_to_front(window: *mut Window) {
     unsafe {
         if let Some(ref mut wm) = WM_STATE {
             wm.bring_to_front(window);
-        }
-    }
-}
-
-#[no_mangle]
-pub extern "C" fn wm_load_wallpaper(filename: *const c_char) -> bool {
-    unsafe {
-        if let Some(ref mut wm) = WM_STATE {
-            let success = wm.load_wallpaper(filename);
-            if success {
-                // Force full screen redraw with new wallpaper
-                wm.desktop_cleared = false;
-                wm.mark_full_dirty();
-            }
-            success
-        } else {
-            false
         }
     }
 }
